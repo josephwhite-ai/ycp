@@ -9,27 +9,31 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
 
 
+PAGES_PER_CHUNK = 10  # adjust as needed
+
+
 def fetch_pdf(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=120) as r:
         return r.read()
 
 
-def split_pdf(pdf_bytes: bytes) -> tuple[bytes, bytes]:
+def split_pdf_into_chunks(pdf_bytes: bytes, pages_per_chunk: int) -> list[bytes]:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     total = len(reader.pages)
-    mid = total // 2
-    print(f"Total pages: {total}, splitting at page {mid}")
+    chunks = []
 
-    def write_half(start, end) -> bytes:
+    for start in range(0, total, pages_per_chunk):
+        end = min(start + pages_per_chunk, total)
         writer = PdfWriter()
         for i in range(start, end):
             writer.add_page(reader.pages[i])
         buf = io.BytesIO()
         writer.write(buf)
-        return buf.getvalue()
+        chunks.append(buf.getvalue())
+        print(f"Chunk {len(chunks)}: pages {start+1}–{end} ({len(chunks[-1]) / 1_000_000:.1f} MB)")
 
-    return write_half(0, mid), write_half(mid, total)
+    return chunks
 
 
 def upload_to_drive(service, name: str, data: bytes, folder_id: str) -> str:
@@ -38,9 +42,10 @@ def upload_to_drive(service, name: str, data: bytes, folder_id: str) -> str:
         body={"name": name, "parents": [folder_id]},
         media_body=media,
         fields="id",
-        supportsAllDrives=True        # <-- required for Shared Drives
+        supportsAllDrives=True
     ).execute()
     return file["id"]
+
 
 if __name__ == "__main__":
     url, folder_id, base_name = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -53,10 +58,17 @@ if __name__ == "__main__":
 
     print(f"Fetching: {url}")
     pdf_bytes = fetch_pdf(url)
-    part1, part2 = split_pdf(pdf_bytes)
+    print(f"Downloaded: {len(pdf_bytes) / 1_000_000:.1f} MB")
 
-    id1 = upload_to_drive(service, f"{base_name}_part1.pdf", part1, folder_id)
-    id2 = upload_to_drive(service, f"{base_name}_part2.pdf", part2, folder_id)
+    chunks = split_pdf_into_chunks(pdf_bytes, PAGES_PER_CHUNK)
+    print(f"Split into {len(chunks)} chunks")
 
-    print(f"DRIVE_FILE_ID_1={id1}")
-    print(f"DRIVE_FILE_ID_2={id2}")
+    ids = []
+    for i, chunk in enumerate(chunks):
+        name = f"{base_name}_part{i+1}.pdf"
+        file_id = upload_to_drive(service, name, chunk, folder_id)
+        ids.append(file_id)
+        print(f"Uploaded {name} → {file_id}")
+
+    # Print all IDs on one line so Apps Script can parse them
+    print(f"DRIVE_FILE_IDS={','.join(ids)}")
