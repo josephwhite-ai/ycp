@@ -7,6 +7,10 @@ on:
         description: 'URL of the PDF to fetch and split'
         required: true
         type: string
+      drive_folder_id:
+        description: 'Google Drive folder ID to upload results to'
+        required: true
+        type: string
 
 jobs:
   split:
@@ -22,19 +26,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pypdf
+        run: pip install pypdf google-auth google-api-python-client
 
-      - name: Fetch and split PDF
-        run: python split_pdf.py "${{ github.event.inputs.pdf_url }}"
-
-      - name: Upload part 1 as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bulletin-part-1
-          path: part1.pdf
-
-      - name: Upload part 2 as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bulletin-part-2
-          path: part2.pdf
+      - name: Fetch, split, and upload to Drive
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python split_and_upload.py "${{ github.event.inputs.pdf_url }}" "${{ github.event.inputs.drive_folder_id }}"
