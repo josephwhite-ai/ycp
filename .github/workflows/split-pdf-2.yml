@@ -30,7 +30,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pypdf google-generativeai google-auth google-api-python-client
+        run: pip install pypdf google-genai google-auth google-api-python-client
 
       - name: Extract events and write to Google Doc
         env:
