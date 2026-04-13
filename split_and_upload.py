@@ -9,7 +9,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
 
 
-PAGES_PER_CHUNK = 10  # adjust as needed
+CHUNK_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB per chunk
 
 
 def fetch_pdf(url: str) -> bytes:
@@ -18,20 +18,40 @@ def fetch_pdf(url: str) -> bytes:
         return r.read()
 
 
-def split_pdf_into_chunks(pdf_bytes: bytes, pages_per_chunk: int) -> list[bytes]:
+def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[bytes]:
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    total = len(reader.pages)
     chunks = []
+    writer = PdfWriter()
+    current_size = 0
 
-    for start in range(0, total, pages_per_chunk):
-        end = min(start + pages_per_chunk, total)
-        writer = PdfWriter()
-        for i in range(start, end):
-            writer.add_page(reader.pages[i])
+    for i, page in enumerate(reader.pages):
+        # Measure this page by writing it alone to a temp buffer
+        temp = PdfWriter()
+        temp.add_page(page)
         buf = io.BytesIO()
-        writer.write(buf)
-        chunks.append(buf.getvalue())
-        print(f"Chunk {len(chunks)}: pages {start+1}–{end} ({len(chunks[-1]) / 1_000_000:.1f} MB)")
+        temp.write(buf)
+        page_size = buf.tell()
+
+        # If adding this page would exceed the limit, flush the current chunk first
+        if current_size + page_size > chunk_size and writer.pages:
+            out = io.BytesIO()
+            writer.write(out)
+            chunk_bytes = out.getvalue()
+            chunks.append(chunk_bytes)
+            print(f"Chunk {len(chunks)}: {len(chunk_bytes) / 1_000_000:.1f} MB (pages up to {i})")
+            writer = PdfWriter()
+            current_size = 0
+
+        writer.add_page(page)
+        current_size += page_size
+
+    # Flush the final chunk
+    if writer.pages:
+        out = io.BytesIO()
+        writer.write(out)
+        chunk_bytes = out.getvalue()
+        chunks.append(chunk_bytes)
+        print(f"Chunk {len(chunks)}: {len(chunk_bytes) / 1_000_000:.1f} MB (final)")
 
     return chunks
 
@@ -60,7 +80,7 @@ if __name__ == "__main__":
     pdf_bytes = fetch_pdf(url)
     print(f"Downloaded: {len(pdf_bytes) / 1_000_000:.1f} MB")
 
-    chunks = split_pdf_into_chunks(pdf_bytes, PAGES_PER_CHUNK)
+    chunks = split_pdf_into_chunks(pdf_bytes, CHUNK_SIZE_BYTES)
     print(f"Split into {len(chunks)} chunks")
 
     ids = []
