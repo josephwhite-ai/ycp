@@ -37,10 +37,10 @@ def upload_to_drive(service, name: str, data: bytes, folder_id: str) -> str:
     file = service.files().create(
         body={"name": name, "parents": [folder_id]},
         media_body=media,
-        fields="id"
+        fields="id",
+        supportsAllDrives=True        # <-- required for Shared Drives
     ).execute()
     return file["id"]
-
 
 if __name__ == "__main__":
     url, folder_id = sys.argv[1], sys.argv[2]
