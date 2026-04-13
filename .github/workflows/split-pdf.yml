@@ -1,0 +1,40 @@
+name: Fetch and Split PDF
+
+on:
+  workflow_dispatch:
+    inputs:
+      pdf_url:
+        description: 'URL of the PDF to fetch and split'
+        required: true
+        type: string
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pypdf
+
+      - name: Fetch and split PDF
+        run: python split_pdf.py "${{ github.event.inputs.pdf_url }}"
+
+      - name: Upload part 1 as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulletin-part-1
+          path: part1.pdf
+
+      - name: Upload part 2 as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulletin-part-2
+          path: part2.pdf
