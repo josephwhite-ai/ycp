@@ -74,7 +74,7 @@ def extract_events_from_chunk(gemini_client, chunk_bytes: bytes, retries: int = 
         for attempt in range(retries):
             try:
                 response = gemini_client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
+                    model="gemini-flash-lite-latest",
                     contents=[uploaded_file, PROMPT]
                 )
                 return response.text.strip()
