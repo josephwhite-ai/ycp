@@ -5,7 +5,8 @@ import json
 import time
 import urllib.request
 from pypdf import PdfReader, PdfWriter
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
@@ -59,26 +60,27 @@ def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[bytes]:
     return chunks
 
 
-def extract_events_from_chunk(model, chunk_bytes: bytes) -> str:
+def extract_events_from_chunk(gemini_client, chunk_bytes: bytes) -> str:
     # Upload to Gemini File API
-    upload_response = genai.upload_file(
-        path=io.BytesIO(chunk_bytes),
-        mime_type="application/pdf",
+    uploaded_file = gemini_client.files.upload(
+        file=io.BytesIO(chunk_bytes),
+        config=types.UploadFileConfig(mime_type="application/pdf")
     )
 
-    # Wait until file is ready
-    gemini_file = upload_response
-    while gemini_file.state.name == "PROCESSING":
+    # Wait until ready
+    while uploaded_file.state.name == "PROCESSING":
         time.sleep(2)
-        gemini_file = genai.get_file(gemini_file.name)
+        uploaded_file = gemini_client.files.get(name=uploaded_file.name)
 
     try:
-        response = model.generate_content([gemini_file, PROMPT])
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[uploaded_file, PROMPT]
+        )
         return response.text.strip()
     finally:
-        # Always delete from Gemini after use
-        genai.delete_file(gemini_file.name)
-        print(f"Deleted Gemini file: {gemini_file.name}")
+        gemini_client.files.delete(name=uploaded_file.name)
+        print(f"Deleted Gemini file: {uploaded_file.name}")
 
 
 def collate(texts: list[str]) -> str:
@@ -131,8 +133,8 @@ if __name__ == "__main__":
     drive_service = build("drive", "v3", credentials=creds)
     docs_service = build("docs", "v1", credentials=creds)
 
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
 
     # Fetch and split
     print(f"Fetching: {pdf_url}")
@@ -145,7 +147,7 @@ if __name__ == "__main__":
     texts = []
     for i, chunk in enumerate(chunks):
         print(f"Processing chunk {i + 1}/{len(chunks)}...")
-        text = extract_events_from_chunk(model, chunk)
+        text = extract_events_from_chunk(gemini_client, chunk)
         texts.append(text)
 
     # Collate and write
