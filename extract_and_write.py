@@ -101,28 +101,21 @@ def collate(texts: list[str]) -> str:
     return "\n".join(lines) if lines else "• No event announcements found."
 
 
-def write_google_doc(drive_service, docs_service, content: str, doc_name: str, folder_id: str) -> str:
-    # Create the doc
-    doc = docs_service.documents().create(body={"title": doc_name}).execute()
-    doc_id = doc["documentId"]
-
-    # Write the content
-    docs_service.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"insertText": {"location": {"index": 1}, "text": content}}]}
+def write_output_file(drive_service, content: str, doc_name: str, folder_id: str) -> str:
+    # Write as a plain text file instead of a Google Doc
+    media = MediaIoBaseUpload(
+        io.BytesIO(content.encode("utf-8")),
+        mimetype="text/plain"
+    )
+    file = drive_service.files().create(
+        body={"name": f"{doc_name}.txt", "parents": [folder_id]},
+        media_body=media,
+        fields="id",
+        supportsAllDrives=True
     ).execute()
 
-    # Move it into the target Drive folder
-    drive_service.files().update(
-        fileId=doc_id,
-        addParents=folder_id,
-        removeParents="root",
-        supportsAllDrives=True,
-        fields="id, parents"
-    ).execute()
-
-    print(f"Written to Google Doc: {doc_name} (id={doc_id})")
-    return doc_id
+    print(f"Written to Drive: {doc_name}.txt (id={file['id']})")
+    return file["id"]
 
 
 if __name__ == "__main__":
@@ -137,8 +130,6 @@ if __name__ == "__main__":
         ]
     )
     drive_service = build("drive", "v3", credentials=creds)
-    docs_service = build("docs", "v1", credentials=creds)
-
     gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
@@ -158,7 +149,7 @@ if __name__ == "__main__":
 
     # Collate and write
     combined = collate(texts)
-    doc_id = write_google_doc(drive_service, docs_service, combined, base_name, folder_id)
+    doc_id = write_output_file(drive_service, combined, base_name, folder_id)
 
     # Print doc ID so it appears in the workflow logs
     print(f"GOOGLE_DOC_ID={doc_id}")
