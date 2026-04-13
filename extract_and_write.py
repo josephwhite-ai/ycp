@@ -60,27 +60,33 @@ def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[bytes]:
     return chunks
 
 
-def extract_events_from_chunk(gemini_client, chunk_bytes: bytes) -> str:
-    # Upload to Gemini File API
+def extract_events_from_chunk(gemini_client, chunk_bytes: bytes, retries: int = 3) -> str:
     uploaded_file = gemini_client.files.upload(
         file=io.BytesIO(chunk_bytes),
         config=types.UploadFileConfig(mime_type="application/pdf")
     )
 
-    # Wait until ready
     while uploaded_file.state.name == "PROCESSING":
         time.sleep(2)
         uploaded_file = gemini_client.files.get(name=uploaded_file.name)
 
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[uploaded_file, PROMPT]
-        )
-        return response.text.strip()
+        for attempt in range(retries):
+            try:
+                response = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=[uploaded_file, PROMPT]
+                )
+                return response.text.strip()
+            except Exception as e:
+                if attempt < retries - 1 and "503" in str(e):
+                    wait = 10 * (attempt + 1)  # 10s, 20s, 30s
+                    print(f"503 on attempt {attempt + 1}, retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
     finally:
         gemini_client.files.delete(name=uploaded_file.name)
-        print(f"Deleted Gemini file: {uploaded_file.name}")
 
 
 def collate(texts: list[str]) -> str:
