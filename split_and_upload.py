@@ -43,24 +43,20 @@ def upload_to_drive(service, name: str, data: bytes, folder_id: str) -> str:
     return file["id"]
 
 if __name__ == "__main__":
-    url, folder_id = sys.argv[1], sys.argv[2]
+    url, folder_id, base_name = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    # Auth
     creds = Credentials.from_service_account_info(
         json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]),
         scopes=["https://www.googleapis.com/auth/drive.file"]
     )
     service = build("drive", "v3", credentials=creds)
 
-    # Fetch and split
     print(f"Fetching: {url}")
     pdf_bytes = fetch_pdf(url)
-    print(f"Downloaded: {len(pdf_bytes) / 1_000_000:.1f} MB")
     part1, part2 = split_pdf(pdf_bytes)
 
-    # Upload both halves
-    id1 = upload_to_drive(service, "part1.pdf", part1, folder_id)
-    id2 = upload_to_drive(service, "part2.pdf", part2, folder_id)
+    id1 = upload_to_drive(service, f"{base_name}_part1.pdf", part1, folder_id)
+    id2 = upload_to_drive(service, f"{base_name}_part2.pdf", part2, folder_id)
 
     print(f"DRIVE_FILE_ID_1={id1}")
     print(f"DRIVE_FILE_ID_2={id2}")
