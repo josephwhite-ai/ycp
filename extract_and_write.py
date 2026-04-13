@@ -1,0 +1,156 @@
+import io
+import os
+import sys
+import json
+import time
+import urllib.request
+from pypdf import PdfReader, PdfWriter
+import google.generativeai as genai
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from google.oauth2.service_account import Credentials
+
+CHUNK_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB per chunk
+
+PROMPT = """You are reading a church/parish bulletin PDF.
+Extract ONLY the event announcements from this document.
+Return them as a plain bulleted list using "•" bullets, one event per bullet.
+Include the event name, date/time if present, and a brief description.
+Do not include mass schedules, regular weekly items, or administrative notices.
+If there are no event announcements, return "• No event announcements found." """
+
+
+def fetch_pdf(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return r.read()
+
+
+def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[bytes]:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    chunks = []
+    writer = PdfWriter()
+    current_size = 0
+
+    for i, page in enumerate(reader.pages):
+        temp = PdfWriter()
+        temp.add_page(page)
+        buf = io.BytesIO()
+        temp.write(buf)
+        page_size = buf.tell()
+
+        if current_size + page_size > chunk_size and writer.pages:
+            out = io.BytesIO()
+            writer.write(out)
+            chunks.append(out.getvalue())
+            print(f"Chunk {len(chunks)}: {len(chunks[-1]) / 1_000_000:.1f} MB (up to page {i})")
+            writer = PdfWriter()
+            current_size = 0
+
+        writer.add_page(page)
+        current_size += page_size
+
+    if writer.pages:
+        out = io.BytesIO()
+        writer.write(out)
+        chunks.append(out.getvalue())
+        print(f"Chunk {len(chunks)}: {len(chunks[-1]) / 1_000_000:.1f} MB (final)")
+
+    return chunks
+
+
+def extract_events_from_chunk(model, chunk_bytes: bytes) -> str:
+    # Upload to Gemini File API
+    upload_response = genai.upload_file(
+        path=io.BytesIO(chunk_bytes),
+        mime_type="application/pdf",
+    )
+
+    # Wait until file is ready
+    gemini_file = upload_response
+    while gemini_file.state.name == "PROCESSING":
+        time.sleep(2)
+        gemini_file = genai.get_file(gemini_file.name)
+
+    try:
+        response = model.generate_content([gemini_file, PROMPT])
+        return response.text.strip()
+    finally:
+        # Always delete from Gemini after use
+        genai.delete_file(gemini_file.name)
+        print(f"Deleted Gemini file: {gemini_file.name}")
+
+
+def collate(texts: list[str]) -> str:
+    seen = set()
+    lines = []
+    for text in texts:
+        for line in text.splitlines():
+            trimmed = line.strip()
+            if trimmed and trimmed != "• No event announcements found." and trimmed not in seen:
+                seen.add(trimmed)
+                lines.append(trimmed)
+    return "\n".join(lines) if lines else "• No event announcements found."
+
+
+def write_google_doc(drive_service, docs_service, content: str, doc_name: str, folder_id: str) -> str:
+    # Create the doc
+    doc = docs_service.documents().create(body={"title": doc_name}).execute()
+    doc_id = doc["documentId"]
+
+    # Write the content
+    docs_service.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{"insertText": {"location": {"index": 1}, "text": content}}]}
+    ).execute()
+
+    # Move it into the target Drive folder
+    drive_service.files().update(
+        fileId=doc_id,
+        addParents=folder_id,
+        removeParents="root",
+        supportsAllDrives=True,
+        fields="id, parents"
+    ).execute()
+
+    print(f"Written to Google Doc: {doc_name} (id={doc_id})")
+    return doc_id
+
+
+if __name__ == "__main__":
+    pdf_url, folder_id, base_name = sys.argv[1], sys.argv[2], sys.argv[3]
+
+    # Auth
+    creds = Credentials.from_service_account_info(
+        json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]),
+        scopes=[
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/documents",
+        ]
+    )
+    drive_service = build("drive", "v3", credentials=creds)
+    docs_service = build("docs", "v1", credentials=creds)
+
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel("gemini-1.5-flash")
+
+    # Fetch and split
+    print(f"Fetching: {pdf_url}")
+    pdf_bytes = fetch_pdf(pdf_url)
+    print(f"Downloaded: {len(pdf_bytes) / 1_000_000:.1f} MB")
+    chunks = split_pdf_into_chunks(pdf_bytes, CHUNK_SIZE_BYTES)
+    print(f"Split into {len(chunks)} chunks")
+
+    # Extract events from each chunk
+    texts = []
+    for i, chunk in enumerate(chunks):
+        print(f"Processing chunk {i + 1}/{len(chunks)}...")
+        text = extract_events_from_chunk(model, chunk)
+        texts.append(text)
+
+    # Collate and write
+    combined = collate(texts)
+    doc_id = write_google_doc(drive_service, docs_service, combined, base_name, folder_id)
+
+    # Print doc ID so it appears in the workflow logs
+    print(f"GOOGLE_DOC_ID={doc_id}")
