@@ -36,4 +36,4 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python extract_and_write.py "${{ github.event.inputs.pdf_url }}" "${{ github.event.inputs.drive_folder_id }}" "${{ github.event.inputs.base_name }}"
+        run: python extract_and_write_gemini.py "${{ github.event.inputs.pdf_url }}" "${{ github.event.inputs.drive_folder_id }}" "${{ github.event.inputs.base_name }}"
