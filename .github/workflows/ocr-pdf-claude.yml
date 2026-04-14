@@ -1,0 +1,33 @@
+name: Extract Bulletin Events
+on:
+  workflow_dispatch:
+    inputs:
+      pdf_url:
+        description: 'URL of the PDF to process'
+        required: true
+        type: string
+      drive_folder_id:
+        description: 'Google Drive folder ID to write the output doc to'
+        required: true
+        type: string
+      base_name:
+        description: 'Base name for the output file (derived from PDF URL)'
+        required: true
+        type: string
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install pypdf anthropic google-auth google-api-python-client
+      - name: Extract events and write to Google Doc
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python extract_and_write.py "${{ github.event.inputs.pdf_url }}" "${{ github.event.inputs.drive_folder_id }}" "${{ github.event.inputs.base_name }}"
