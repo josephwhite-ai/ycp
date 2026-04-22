@@ -1,4 +1,4 @@
-name: Extract Bulletin Events
+name: Extract Bulletin Events Using Gemini
 
 on:
   workflow_dispatch:
