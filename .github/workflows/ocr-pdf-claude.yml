@@ -1,4 +1,4 @@
-name: Extract Bulletin Events
+name: Extract Bulletin Events Using Claude
 on:
   workflow_dispatch:
     inputs:
