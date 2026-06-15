@@ -1,4 +1,4 @@
-name: Glue Up Test Login
+name: Glue Up Login (Headless)
 
 on:
   workflow_dispatch:

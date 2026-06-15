@@ -72,7 +72,7 @@ export GLUEUP_PASSWORD="..."
 npm run glueup-login-headless
 ```
 
-GitHub Actions workflow: `.github/workflows/glueup-test-login.yml` (requires `GLUEUP_EMAIL` and `GLUEUP_PASSWORD` secrets). It prints org ID and token lengths only, not secrets.
+GitHub Actions workflow: `.github/workflows/glueup-login-headless.yml` (requires `GLUEUP_EMAIL` and `GLUEUP_PASSWORD` secrets). It prints org ID and token lengths only, not secrets.
 
 Session cookies and CSRF tokens are intentionally not stored in source files. They expire and should be treated like passwords.
 
