@@ -19,6 +19,8 @@ on:
 jobs:
   extract:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repo
@@ -36,4 +38,7 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python bulletins/extract_and_write_gemini.py "${{ github.event.inputs.pdf_url }}" "${{ github.event.inputs.drive_folder_id }}" "${{ github.event.inputs.base_name }}"
+          PDF_URL: ${{ github.event.inputs.pdf_url }}
+          DRIVE_FOLDER_ID: ${{ github.event.inputs.drive_folder_id }}
+          BASE_NAME: ${{ github.event.inputs.base_name }}
+        run: python bulletins/extract_and_write_gemini.py "$PDF_URL" "$DRIVE_FOLDER_ID" "$BASE_NAME"
