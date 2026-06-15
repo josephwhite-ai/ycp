@@ -7,6 +7,8 @@ import { extractEventFromGoogleDoc } from "./extract/docsTableExtractor.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
+import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
+import { loginGlueUp, resolveGlueUpAuth, testHeadlessLogin } from "./glueup/session.js";
 
 loadDotEnv();
 
@@ -18,6 +20,12 @@ try {
     await prepare(args);
   } else if (command === "validate") {
     await validate(args);
+  } else if (command === "create-draft") {
+    await createDraft(args);
+  } else if (command === "glueup-login") {
+    await glueupLogin(args);
+  } else if (command === "test-glueup-login") {
+    await testGlueupLogin(args);
   } else {
     usage();
     process.exit(command ? 1 : 0);
@@ -130,20 +138,121 @@ async function validate(args) {
   if (!validation.ok) process.exitCode = 1;
 }
 
+async function createDraft(args) {
+  const runDir = resolveRunDir(args);
+
+  const [manifest, templateSelection] = await Promise.all([
+    readJson(join(runDir, "manifest.json")),
+    readJson(join(runDir, "template-selection.json"))
+  ]);
+
+  const selected = templateSelection?.selected;
+  if (!selected?.glueUp?.eventType || !selected?.glueUp?.blueprintCode) {
+    throw new Error("template-selection.json is missing a selected Glue Up blueprint.");
+  }
+
+  if (args.dryRun) {
+    const request = buildDraftCreateRequest({
+      templateSelection,
+      csrfToken: process.env.GLUEUP_CSRF_TOKEN || "<missing>"
+    });
+    const plan = {
+      runDir,
+      blueprintCode: selected.glueUp.blueprintCode,
+      eventType: selected.glueUp.eventType,
+      template: {
+        key: selected.key,
+        label: selected.label,
+        variantKey: selected.variantKey,
+        variantLabel: selected.variantLabel
+      },
+      request: {
+        method: request.method,
+        url: request.url,
+        headers: request.headers
+      }
+    };
+    await writeJson(join(runDir, "draft-create-plan.json"), plan);
+    console.log(`Wrote draft create plan to ${join(runDir, "draft-create-plan.json")}`);
+    return;
+  }
+
+  const auth = await resolveGlueUpAuth({ headless: !args.headed });
+  if (auth.source === "playwright") {
+    console.log("Using Playwright session from .glueup-session");
+  }
+
+  const result = await createDraftFromBlueprint({
+    templateSelection,
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    orgId: auth.orgId
+  });
+  const createdAt = new Date().toISOString();
+
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    eventId: result.eventId,
+    eventUrl: result.eventUrl,
+    draftCreatedAt: createdAt,
+    blueprintCode: selected.glueUp.blueprintCode,
+    eventType: selected.glueUp.eventType
+  };
+  manifest.status = "draft_created";
+
+  await Promise.all([
+    writeJson(join(runDir, "manifest.json"), manifest),
+    writeJson(join(runDir, "draft-create-response.json"), result.raw)
+  ]);
+
+  console.log(`Created Glue Up draft for ${runDir}`);
+  if (result.eventId) console.log(`Event ID: ${result.eventId}`);
+  if (result.eventUrl) console.log(`Event URL: ${result.eventUrl}`);
+}
+
+async function glueupLogin(args) {
+  const auth = await loginGlueUp({ headless: args.headless ?? false });
+  console.log(`Session saved. Org ID: ${auth.orgId}`);
+  console.log(`Draft workspace: https://ycp.glueup.com/events/draft`);
+}
+
+async function testGlueupLogin() {
+  const result = await testHeadlessLogin();
+  console.log(JSON.stringify(result, null, 2));
+}
+
+function resolveRunDir(args) {
+  if (args.run) return args.run;
+  if (args.month) return join("runs", parseMonth(args.month).slug);
+  throw new Error("Missing --run or --month.");
+}
+
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 async function readJson(path) {
-  return JSON.parse(await readFile(path, "utf8"));
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(
+        `Missing run file "${path}". Prepare the run first with:\n  npm run monthly-prepare -- --month 2026-06\nOr download the glueup-run artifact from GitHub Actions into glueup/runs/.`
+      );
+    }
+    throw error;
+  }
 }
 
 function usage() {
   console.log(`Glue Up Agent
 
 Usage:
-  npm run prepare -- --month 2026-06
+  npm run monthly-prepare -- --month 2026-06
   npm run validate -- --run runs/2026-06
+  npm run create-draft -- --month 2026-06
+  npm run glueup-login
+  npm run test-glueup-login
 
 Options:
   --month YYYY-MM
@@ -153,5 +262,7 @@ Options:
   --event-type NHH
   --event-index 06
   --dry-run
+  --headed          Use a visible browser when refreshing Playwright auth for create-draft
+  --headless        Run glueup-login without opening a browser window
 `);
 }

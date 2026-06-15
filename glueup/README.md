@@ -37,13 +37,42 @@ Events default to public unless the source data explicitly says members-only/pri
 
 ## Glue Up draft creation
 
-Glue Up draft creation currently uses the same internal AJAX endpoint the admin UI calls. Store session values only in environment variables:
+Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls when you start from `https://ycp.glueup.com/events/draft`.
+
+Preferred local auth:
+
+```bash
+npm run glueup-login
+npm run create-draft -- --run runs/2026-06
+```
+
+`glueup-login` saves a browser session under `.glueup-session/`. `create-draft` reuses it automatically when `GLUEUP_COOKIE` and `GLUEUP_CSRF_TOKEN` are not set.
+
+Manual env override still works:
 
 ```bash
 export GLUEUP_ORG_ID=5828
 export GLUEUP_COOKIE="..."
 export GLUEUP_CSRF_TOKEN="..."
 ```
+
+Optional automated sign-in during `glueup-login`:
+
+```bash
+export GLUEUP_EMAIL="..."
+export GLUEUP_PASSWORD="..."
+npm run glueup-login
+```
+
+Headless login smoke test (local or CI):
+
+```bash
+export GLUEUP_EMAIL="..."
+export GLUEUP_PASSWORD="..."
+npm run test-glueup-login
+```
+
+GitHub Actions workflow: `.github/workflows/glueup-test-login.yml` (requires `GLUEUP_EMAIL` and `GLUEUP_PASSWORD` secrets). It prints org ID and token lengths only, not secrets.
 
 Session cookies and CSRF tokens are intentionally not stored in source files. They expire and should be treated like passwords.
 
@@ -71,7 +100,7 @@ Local auth options are still supported for debugging:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
-npm run prepare -- --month 2026-06
+npm run monthly-prepare -- --month 2026-06
 ```
 
 You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallback/debug paths. The direct Google APIs are used instead of `gws`.
@@ -79,18 +108,20 @@ You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallba
 ## Commands
 
 ```bash
-npm run prepare -- --month 2026-06
+npm run monthly-prepare -- --month 2026-06
 npm run validate -- --run runs/2026-06
+npm run create-draft -- --run runs/2026-06
+npm run glueup-login
 npm run check
 ```
 
 Useful options:
 
 ```bash
-npm run prepare -- --month 2026-06 --dry-run
-npm run prepare -- --month 2026-06 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
-npm run prepare -- --month 2026-06 --event-type NHH
-npm run prepare -- --month 2026-06 --event-index 06
+npm run monthly-prepare -- --month 2026-06 --dry-run
+npm run monthly-prepare -- --month 2026-06 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
+npm run monthly-prepare -- --month 2026-06 --event-type NHH
+npm run monthly-prepare -- --month 2026-06 --event-index 06
 ```
 
 ## Event folder naming
