@@ -1,5 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+const DEBUG_DIR = ".glueup-debug";
 
 export const GLUEUP_BASE_URL = "https://ycp.glueup.com";
 export const GLUEUP_DRAFT_URL = `${GLUEUP_BASE_URL}/events/draft`;
@@ -61,7 +63,10 @@ export async function getGlueUpSession(options = {}) {
     await openDraftWorkspace(session.page);
     await maybeSubmitCredentials(session.page, options);
     await waitForAuthenticatedDraftPage(session.page, options);
-    return extractSession(session.context, session.page);
+    return await extractSession(session.context, session.page);
+  } catch (error) {
+    await captureFailureArtifacts(session.page, error);
+    throw error;
   } finally {
     await session.close();
   }
@@ -260,4 +265,23 @@ async function extractOrgId(page) {
 
 export function sessionDirExists(sessionDir = process.env.GLUEUP_SESSION_DIR || DEFAULT_SESSION_DIR) {
   return existsSync(resolve(sessionDir));
+}
+
+async function captureFailureArtifacts(page, error) {
+  try {
+    const dir = resolve(DEBUG_DIR);
+    mkdirSync(dir, { recursive: true });
+    const url = page.url();
+    const html = await page.content().catch(() => "<unavailable>");
+    writeFileSync(resolve(dir, "page.html"), html, "utf8");
+    writeFileSync(
+      resolve(dir, "context.txt"),
+      `url: ${url}\nerror: ${error?.message || error}\n`,
+      "utf8"
+    );
+    await page.screenshot({ path: resolve(dir, "page.png"), fullPage: true });
+    console.error(`Login failed at ${url}. Wrote diagnostics to ${dir}/.`);
+  } catch (captureError) {
+    console.error(`Could not capture failure diagnostics: ${captureError?.message || captureError}`);
+  }
 }

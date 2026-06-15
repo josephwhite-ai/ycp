@@ -32,3 +32,11 @@ jobs:
           GLUEUP_PASSWORD: ${{ secrets.GLUEUP_PASSWORD }}
           CI: true
         run: npm run glueup-login-headless
+
+      - name: Upload login diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glueup-login-diagnostics
+          path: glueup/.glueup-debug/
+          if-no-files-found: ignore
