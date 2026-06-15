@@ -45,15 +45,17 @@ Each run targets one event, identified by its index — a counter unique across 
 
 Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step must run locally because Glue Up's login is behind Cloudflare. `create-draft` bridges both halves in one command: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and runs the create flow.
 
+With no arguments, `create-draft` pulls the **latest successful prepare run** from CI and infers which event it is from the artifact name — so the event index is named once, on GitHub, and never repeated locally:
+
 ```bash
-npm run create-draft -- --event 6   # sync artifact + login if needed + create draft
-npm run create-draft                 # reuse the active event from a previous run
+npm run create-draft                      # latest prepared event + login if needed + create draft
 ```
 
-You name the event **once**, at the first `create-draft`; it is persisted to `runs/.active-event` and later runs reuse it. Add `--year 2025` for a past year, and `--fresh` to dispatch the prepare workflow and wait for it before downloading, instead of using the latest existing artifact:
+Name an index locally only to target a specific older event, or with `--fresh` to dispatch a new prepare run (the one place the index is named for a fresh run). Add `--year 2025` for a past year:
 
 ```bash
-npm run create-draft -- --event 6 --fresh
+npm run create-draft -- --event 6         # target a specific older event
+npm run create-draft -- --event 6 --fresh # dispatch a new prepare, wait, then create the draft
 ```
 
 `create-draft` requires the `gh` CLI (authenticated) to pull the artifact. Auth resolves in this order: `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment, then a still-valid saved session under `.glueup-session/` (probed headlessly), then a headed login. The saved session is reused across events, so the browser rarely opens.

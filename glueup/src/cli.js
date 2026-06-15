@@ -22,7 +22,7 @@ import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
 loadDotEnv();
 
 const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
-const ACTIVE_EVENT_FILE = join("runs", ".active-event");
+const ARTIFACT_PREFIX = "glueup-run-";
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -243,7 +243,7 @@ async function syncEvent(eventInfo, { fresh = false } = {}) {
   }
 
   const { slug } = eventInfo;
-  const artifact = `glueup-run-${slug}`;
+  const artifact = `${ARTIFACT_PREFIX}${slug}`;
   console.log(`Downloading artifact ${artifact} into runs/ ...`);
   gh(["run", "download", "-n", artifact, "-D", "runs"]);
 
@@ -253,9 +253,57 @@ async function syncEvent(eventInfo, { fresh = false } = {}) {
       `Synced artifact did not contain ${manifestPath}. No prepared run for ${slug} was found — pass --fresh to generate it.`
     );
   }
+}
 
-  await writeFile(ACTIVE_EVENT_FILE, `${slug}\n`, "utf8");
-  console.log(`Active event set to ${slug}.`);
+// Pull the most recent successful prepare run and infer which event it is from
+// the artifact name (glueup-run-evt-<year>-<index>). This is the default path
+// for create-draft: the index is named once, on GitHub, not again locally.
+async function syncLatestEvent() {
+  const runs = JSON.parse(
+    ghCapture([
+      "run",
+      "list",
+      "--workflow",
+      PREPARE_WORKFLOW,
+      "--status",
+      "success",
+      "--limit",
+      "1",
+      "--json",
+      "databaseId,displayTitle,createdAt"
+    ])
+  );
+  if (!runs.length) {
+    throw new Error(
+      `No successful ${PREPARE_WORKFLOW} run found. Dispatch one with: npm run create-draft -- --event <index> --fresh`
+    );
+  }
+
+  const runId = runs[0].databaseId;
+  const artifacts = JSON.parse(
+    ghCapture([
+      "api",
+      `repos/{owner}/{repo}/actions/runs/${runId}/artifacts`,
+      "--jq",
+      ".artifacts"
+    ])
+  );
+  const artifact = artifacts.find((a) => a.name.startsWith(ARTIFACT_PREFIX));
+  if (!artifact) {
+    throw new Error(`Latest prepare run #${runId} has no ${ARTIFACT_PREFIX}* artifact.`);
+  }
+
+  const slug = artifact.name.slice(ARTIFACT_PREFIX.length);
+  const eventInfo = eventInfoFromSlug(slug);
+  console.log(`Pulling latest prepared event ${eventInfo.index} (${eventInfo.year}) from run #${runId} ...`);
+  gh(["run", "download", String(runId), "-n", artifact.name, "-D", "runs"]);
+
+  const manifestPath = join("runs", slug, "manifest.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Synced artifact did not contain ${manifestPath}.`);
+  }
+
+  return slug;
 }
 
 async function triggerPrepare(eventInfo) {
@@ -310,35 +358,30 @@ function ghCapture(argv) {
   return execFileSync("gh", argv, { encoding: "utf8" });
 }
 
-async function readActiveEvent() {
-  try {
-    return (await readFile(ACTIVE_EVENT_FILE, "utf8")).trim() || null;
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-// Resolve the run for create-draft, syncing the artifact from CI when it isn't
-// already on disk (or when --fresh forces a new prepare). The event is named
-// here once via --event; later runs with no --event reuse the active event.
+// Resolve the run for create-draft. With no flags it pulls the latest successful
+// prepare run from CI and infers the event — the index is named once, on GitHub.
+// --fresh dispatches a new prepare (the one place you name the index locally);
+// --event N targets a specific older event; --run path uses a local run as-is.
 async function prepareRunForDraft(args) {
   if (args.run) return args.run;
 
-  const active = await readActiveEvent();
-  const eventInfo = args.event !== undefined ? parseEvent(args) : active && eventInfoFromSlug(active);
-  if (!eventInfo) {
-    throw new Error("No event set. Run: npm run create-draft -- --event <index>");
+  if (args.fresh) {
+    const eventInfo = parseEvent(args);
+    await syncEvent(eventInfo, { fresh: true });
+    return join("runs", eventInfo.slug);
   }
 
-  const runDir = join("runs", eventInfo.slug);
-  if (args.fresh || !existsSync(join(runDir, "manifest.json"))) {
-    await syncEvent(eventInfo, { fresh: args.fresh });
-  } else if (eventInfo.slug !== active) {
-    await writeFile(ACTIVE_EVENT_FILE, `${eventInfo.slug}\n`, "utf8");
+  if (args.event !== undefined) {
+    const eventInfo = parseEvent(args);
+    const runDir = join("runs", eventInfo.slug);
+    if (!existsSync(join(runDir, "manifest.json"))) {
+      await syncEvent(eventInfo, { fresh: false });
+    }
+    return runDir;
   }
 
-  return runDir;
+  const slug = await syncLatestEvent();
+  return join("runs", slug);
 }
 
 async function writeJson(path, value) {
@@ -362,11 +405,12 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
-  npm run create-draft -- --event 6   # syncs the CI artifact, logs in if needed, creates the draft
-  npm run create-draft                 # reuse the active event from a previous run
+  npm run create-draft                      # pull the latest prepared event from CI + create the draft
+  npm run create-draft -- --event 6         # target a specific older event
+  npm run create-draft -- --event 6 --fresh # dispatch a new prepare run, then create the draft
 
 Other commands:
-  npm run sync-run -- --event 6 [--fresh]   # pre-stage the artifact only
+  npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only
   npm run glueup-login                      # refresh the saved browser session only
   npm run monthly-prepare -- --event 6
   npm run validate -- --run runs/evt-2026-006
