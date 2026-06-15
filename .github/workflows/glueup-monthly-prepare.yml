@@ -1,0 +1,60 @@
+name: Monthly Glue Up Prepare
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: Month to prepare, formatted as YYYY-MM.
+        required: true
+        default: "2026-06"
+  schedule:
+    # 09:00 UTC is 04:00 America/New_York during standard time and 05:00 during daylight time.
+    # Keep scheduling/publishing inside the app timezone logic; this job only prepares drafts.
+    - cron: "0 9 15 * *"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Write Google credentials
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GOOGLE_CREDENTIALS_JSON" ]; then
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON secret is missing."
+            exit 1
+          fi
+          mkdir -p credentials
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials/google-service-account.json
+
+      - name: Check
+        run: npm run check
+        working-directory: glueup
+
+      - name: Prepare monthly run
+        working-directory: glueup
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ../credentials/google-service-account.json
+          GLUEUP_EVENTS_FOLDER_ID: ${{ vars.GLUEUP_EVENTS_FOLDER_ID || '1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE' }}
+          TIMEZONE: America/New_York
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          MONTH="${{ github.event.inputs.month }}"
+          if [ -z "$MONTH" ]; then
+            MONTH="$(date -u +%Y-%m)"
+          fi
+          npm run prepare -- --month "$MONTH"
+
+      - name: Upload run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: glueup-run
+          path: glueup/runs/

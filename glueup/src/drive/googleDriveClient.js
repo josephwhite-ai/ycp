@@ -1,0 +1,224 @@
+import { execFileSync } from "node:child_process";
+import { createPrivateKey, createSign } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const DRIVE_BASE = "https://www.googleapis.com/drive/v3";
+const DOCS_BASE = "https://docs.googleapis.com/v1";
+const TOKEN_URL = "https://oauth2.googleapis.com/token";
+const SCOPES = [
+  "https://www.googleapis.com/auth/drive.readonly",
+  "https://www.googleapis.com/auth/documents.readonly"
+];
+
+export class GoogleDriveClient {
+  constructor({ accessTokenProvider = defaultAccessTokenProvider } = {}) {
+    this.accessTokenProvider = accessTokenProvider;
+  }
+
+  async listChildren(folderId, { pageSize = 100, fields } = {}) {
+    const params = new URLSearchParams({
+      q: `'${folderId}' in parents and trashed = false`,
+      pageSize: String(pageSize),
+      supportsAllDrives: "true",
+      includeItemsFromAllDrives: "true",
+      fields:
+        fields ||
+        "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink, parents)"
+    });
+
+    const files = [];
+    let pageToken = "";
+    do {
+      if (pageToken) params.set("pageToken", pageToken);
+      const data = await this.#request(`${DRIVE_BASE}/files?${params}`);
+      files.push(...(data.files || []));
+      pageToken = data.nextPageToken || "";
+    } while (pageToken);
+
+    return files;
+  }
+
+  async findChildFolder(parentId, candidates) {
+    const children = await this.listChildren(parentId);
+    const folders = children.filter(
+      (file) => file.mimeType === "application/vnd.google-apps.folder"
+    );
+    return folders.find((file) => candidates.includes(normalizeName(file.name))) || null;
+  }
+
+  async findChildFile(parentId, targetName) {
+    const children = await this.listChildren(parentId);
+    const normalizedTarget = normalizeName(targetName);
+    return (
+      children.find((file) => normalizeName(file.name) === normalizedTarget) ||
+      children.find((file) => normalizeName(file.name).includes(normalizedTarget)) ||
+      null
+    );
+  }
+
+  async findMonthlyFolder(eventsFolderId, monthInfo) {
+    const yearFolder = await this.findChildFolder(eventsFolderId, [
+      normalizeName(String(monthInfo.year)),
+      normalizeName(`${monthInfo.year} Events`)
+    ]);
+    if (!yearFolder) {
+      throw new Error(`Could not find Drive year folder for ${monthInfo.year}.`);
+    }
+
+    const monthPadded = String(monthInfo.month).padStart(2, "0");
+    const monthCandidates = [
+      monthInfo.monthName,
+      `${monthPadded} ${monthInfo.monthName}`,
+      `${monthPadded} - ${monthInfo.monthName}`,
+      `${monthInfo.monthName} ${monthInfo.year}`,
+      `${monthPadded}. ${monthInfo.monthName}`
+    ].map(normalizeName);
+
+    const monthFolder = await this.findChildFolder(yearFolder.id, monthCandidates);
+    if (!monthFolder) {
+      throw new Error(`Could not find Drive month folder for ${monthInfo.monthName} ${monthInfo.year}.`);
+    }
+
+    return { yearFolder, monthFolder };
+  }
+
+  async getGoogleDoc(documentId) {
+    return this.#request(`${DOCS_BASE}/documents/${documentId}`);
+  }
+
+  async listImagesRecursive(folderId, { maxDepth = 2 } = {}) {
+    const images = [];
+    await this.#walk(folderId, 0, maxDepth, images);
+    return images;
+  }
+
+  async #walk(folderId, depth, maxDepth, images) {
+    const children = await this.listChildren(folderId);
+    for (const child of children) {
+      if (child.mimeType?.startsWith("image/")) {
+        images.push(child);
+      } else if (
+        depth < maxDepth &&
+        child.mimeType === "application/vnd.google-apps.folder"
+      ) {
+        await this.#walk(child.id, depth + 1, maxDepth, images);
+      }
+    }
+  }
+
+  async #request(url, options = {}) {
+    const token = await this.accessTokenProvider();
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      }
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Google API request failed ${response.status}: ${body}`);
+    }
+
+    return response.json();
+  }
+}
+
+export async function defaultAccessTokenProvider() {
+  if (process.env.GOOGLE_ACCESS_TOKEN) return process.env.GOOGLE_ACCESS_TOKEN;
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return serviceAccountAccessToken(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  }
+
+  const adcPath =
+    process.env.GOOGLE_APPLICATION_DEFAULT_CREDENTIALS ||
+    join(process.env.HOME || "", ".config/gcloud/application_default_credentials.json");
+  if (adcPath && existsSync(adcPath)) {
+    return applicationDefaultAccessToken(adcPath);
+  }
+
+  try {
+    return execFileSync("gcloud", ["auth", "print-access-token"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+  } catch {
+    throw new Error(
+      "No Google auth available. Set GOOGLE_ACCESS_TOKEN, GOOGLE_APPLICATION_CREDENTIALS, or log into gcloud with the account that can access the Drive folder."
+    );
+  }
+}
+
+async function applicationDefaultAccessToken(credentialsPath) {
+  const credentials = JSON.parse(readFileSync(credentialsPath, "utf8"));
+  if (credentials.type === "service_account") {
+    return serviceAccountAccessToken(credentialsPath);
+  }
+  if (!credentials.refresh_token || !credentials.client_id || !credentials.client_secret) {
+    throw new Error(`Application Default Credentials at ${credentialsPath} are not refreshable user credentials.`);
+  }
+
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      refresh_token: credentials.refresh_token,
+      grant_type: "refresh_token"
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Application Default Credentials token request failed ${response.status}: ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  return data.access_token;
+}
+
+async function serviceAccountAccessToken(credentialsPath) {
+  const credentials = JSON.parse(readFileSync(credentialsPath, "utf8"));
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = base64Url(
+    JSON.stringify({
+      iss: credentials.client_email,
+      scope: SCOPES.join(" "),
+      aud: TOKEN_URL,
+      iat: now,
+      exp: now + 3600
+    })
+  );
+  const unsigned = `${header}.${payload}`;
+  const sign = createSign("RSA-SHA256");
+  sign.update(unsigned);
+  const signature = sign.sign(createPrivateKey(credentials.private_key), "base64url");
+
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: `${unsigned}.${signature}`
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Service account token request failed ${response.status}: ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  return data.access_token;
+}
+
+function base64Url(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function normalizeName(name) {
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}

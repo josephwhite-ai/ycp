@@ -1,0 +1,130 @@
+export function extractEventFromGoogleDoc(doc) {
+  const tables = [];
+  const paragraphs = [];
+
+  for (const content of doc.body?.content || []) {
+    if (content.table) {
+      tables.push(extractTable(content.table));
+    } else if (content.paragraph) {
+      const text = extractParagraphText(content.paragraph);
+      if (text) paragraphs.push(text);
+    }
+  }
+
+  const fields = {};
+  const sessions = [];
+
+  for (const table of tables) {
+    if (table.length === 0) continue;
+    if (looksLikeKeyValueTable(table)) {
+      Object.assign(fields, tableToKeyValues(table));
+    } else {
+      sessions.push(...tableToSessions(table));
+    }
+  }
+
+  const event = {
+    sourceDocumentTitle: doc.title || "",
+    eventType: pick(fields, ["event type", "program type", "template", "format"]) || "",
+    eventName:
+      pick(fields, ["event name", "title", "program title"]) || doc.title?.replace(/ - Event Summary Sheet$/i, "") || "",
+    eventDate: normalizeDate(pick(fields, ["event date", "date", "program date"]) || ""),
+    venue: pick(fields, ["venue", "location", "place"]) || "",
+    city: pick(fields, ["city"]) || "",
+    registrationUrl: pick(fields, ["registration url", "registration link", "link", "url"]) || "",
+    description: pick(fields, ["description", "overview", "summary"]) || paragraphs.join("\n\n"),
+    rawFields: fields,
+    sessions
+  };
+
+  return event;
+}
+
+function extractTable(table) {
+  return (table.tableRows || []).map((row) =>
+    (row.tableCells || []).map((cell) =>
+      (cell.content || [])
+        .map((item) => (item.paragraph ? extractParagraphText(item.paragraph) : ""))
+        .filter(Boolean)
+        .join("\n")
+        .trim()
+    )
+  );
+}
+
+function extractParagraphText(paragraph) {
+  return (paragraph.elements || [])
+    .map((element) => element.textRun?.content || "")
+    .join("")
+    .replace(/\s+\n/g, "\n")
+    .trim();
+}
+
+function looksLikeKeyValueTable(table) {
+  const rowsWithTwoCells = table.filter((row) => row.length >= 2 && row[0] && row[1]);
+  if (rowsWithTwoCells.length === 0) return false;
+  const firstCellValues = rowsWithTwoCells.map((row) => row[0].toLowerCase());
+  return firstCellValues.some((value) =>
+    ["event", "date", "venue", "location", "registration", "description", "summary"].some((hint) =>
+      value.includes(hint)
+    )
+  );
+}
+
+function tableToKeyValues(table) {
+  const fields = {};
+  for (const row of table) {
+    if (row.length < 2 || !row[0]) continue;
+    fields[normalizeKey(row[0])] = row.slice(1).filter(Boolean).join(" ").trim();
+  }
+  return fields;
+}
+
+function tableToSessions(table) {
+  const [headerRow, ...rows] = table;
+  if (!headerRow || headerRow.length === 0) return [];
+
+  const headers = headerRow.map((header) => normalizeKey(header));
+  return rows
+    .filter((row) => row.some(Boolean))
+    .map((row) => {
+      const session = {};
+      headers.forEach((header, index) => {
+        if (!header) return;
+        session[header] = row[index] || "";
+      });
+      return {
+        time: pick(session, ["time", "start time", "session time"]) || "",
+        title: pick(session, ["title", "session title", "topic"]) || "",
+        speakers: splitPeople(pick(session, ["speakers", "speaker", "presenter", "presenters"]) || ""),
+        description: pick(session, ["description", "summary", "details"]) || "",
+        raw: session
+      };
+    });
+}
+
+function normalizeKey(value) {
+  return value.toLowerCase().replace(/[:*]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function pick(object, keys) {
+  for (const key of keys) {
+    const value = object[normalizeKey(key)];
+    if (value) return value;
+  }
+  return "";
+}
+
+function splitPeople(value) {
+  return value
+    .split(/\n|;|,(?=\s*[A-Z])/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toISOString().slice(0, 10);
+}
