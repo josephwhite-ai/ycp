@@ -12,23 +12,36 @@ const LOGIN_PATH_HINTS = ["/login", "/signin", "/sign-in", "/account/login", "/u
 const AUTH_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 const CI_AUTH_WAIT_TIMEOUT_MS = 90 * 1000;
 
-export async function resolveGlueUpAuth(options = {}) {
+// Single entry point for the CLI: env secrets > a still-valid saved session
+// (probed headlessly, which Cloudflare allows) > a headed login (which Cloudflare
+// requires a human to pass). The headed browser only opens when there is no
+// usable session, so the happy path never prompts.
+export async function ensureGlueUpAuth(options = {}) {
   const cookie = process.env.GLUEUP_COOKIE;
   const csrfToken = process.env.GLUEUP_CSRF_TOKEN;
   const orgId = process.env.GLUEUP_ORG_ID || DEFAULT_ORG_ID;
-
   if (cookie && csrfToken) {
     return { cookie, csrfToken, orgId, source: "env" };
   }
 
-  if (process.env.CI && !process.env.GLUEUP_EMAIL && !process.env.GLUEUP_PASSWORD) {
+  if (process.env.CI) {
     throw new Error(
-      "CI requires GLUEUP_EMAIL and GLUEUP_PASSWORD repository secrets (or GLUEUP_COOKIE and GLUEUP_CSRF_TOKEN)."
+      "CI requires GLUEUP_COOKIE and GLUEUP_CSRF_TOKEN repository secrets; headed login cannot run on CI."
     );
   }
 
-  const session = await getGlueUpSession(options);
-  return { ...session, source: "playwright" };
+  if (sessionDirExists(options.sessionDir)) {
+    try {
+      const session = await getGlueUpSession({ ...options, headless: true, interactive: false });
+      return { ...session, source: "session" };
+    } catch (error) {
+      if (error?.code !== "GLUEUP_LOGIN_REQUIRED") throw error;
+      console.log("Saved Glue Up session is missing or expired; opening a browser to log in.");
+    }
+  }
+
+  const session = await loginGlueUp({ ...options, headless: false });
+  return { ...session, source: "login" };
 }
 
 export async function loginGlueUp(options = {}) {
@@ -66,7 +79,9 @@ export async function getGlueUpSession(options = {}) {
     await waitForAuthenticatedDraftPage(session.page, options);
     return await extractSession(session.context, session.page);
   } catch (error) {
-    await captureFailureArtifacts(session.page, error);
+    if (error?.code !== "GLUEUP_LOGIN_REQUIRED") {
+      await captureFailureArtifacts(session.page, error);
+    }
     throw error;
   } finally {
     await session.close();
@@ -152,8 +167,10 @@ async function maybeSubmitCredentials(page, options = {}) {
 
 async function waitForAuthenticatedDraftPage(page, options = {}) {
   const headless = options.headless ?? true;
-  // CI/headless has no human to finish an interactive login, so fail fast
-  // instead of spinning for the full interactive window.
+  // A non-interactive probe (a saved-session check) has no human to finish a
+  // login, so the moment a login page appears we bail with a typed error the
+  // caller can catch and escalate to a headed login.
+  const interactive = options.interactive ?? true;
   const ephemeral = options.ephemeral ?? Boolean(process.env.CI);
   const timeout = ephemeral ? CI_AUTH_WAIT_TIMEOUT_MS : AUTH_WAIT_TIMEOUT_MS;
   const deadline = Date.now() + timeout;
@@ -163,6 +180,12 @@ async function waitForAuthenticatedDraftPage(page, options = {}) {
     const url = page.url();
     if (isDraftWorkspaceUrl(url) && !(await isLoginPage(page))) {
       return;
+    }
+
+    if (!interactive && (await isLoginPage(page))) {
+      const error = new Error("Glue Up session requires an interactive login.");
+      error.code = "GLUEUP_LOGIN_REQUIRED";
+      throw error;
     }
 
     if (await isLoginPage(page) && Date.now() - lastLog > 10_000) {
