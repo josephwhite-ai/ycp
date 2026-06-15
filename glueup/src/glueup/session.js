@@ -267,24 +267,43 @@ export function sessionDirExists(sessionDir = process.env.GLUEUP_SESSION_DIR || 
   return existsSync(resolve(sessionDir));
 }
 
+// Value-free: this runs on a PUBLIC repo where logs/artifacts are world-readable,
+// so it must only emit names, counts, and lengths — never token/cookie values.
 async function captureFailureArtifacts(page, error) {
   try {
     const dir = resolve(DEBUG_DIR);
     mkdirSync(dir, { recursive: true });
     const url = page.url();
-    const html = await page.content().catch(() => "<unavailable>");
-    writeFileSync(resolve(dir, "page.html"), html, "utf8");
+
+    const probe = await page
+      .evaluate(() => {
+        const metaTokenNames = [...document.querySelectorAll("meta")]
+          .map((m) => m.getAttribute("name") || m.getAttribute("id"))
+          .filter((n) => n && /csrf|token/i.test(n));
+        const tokenInputs = [...document.querySelectorAll("input")]
+          .filter((i) => /csrf|token/i.test(i.name || ""))
+          .map((i) => ({ name: i.name, valueLength: (i.value || "").length }));
+        const globalKeys = Object.keys(window).filter((k) => /csrf|token|org/i.test(k));
+        return {
+          metaCount: document.querySelectorAll("meta").length,
+          metaTokenNames,
+          tokenInputs,
+          globalKeys
+        };
+      })
+      .catch((e) => ({ probeError: e?.message || String(e) }));
 
     const cookies = await page.context().cookies(GLUEUP_BASE_URL).catch(() => []);
-    const cookieNames = cookies.map((c) => c.name).join(", ") || "<none>";
+    const cookieSummary = cookies.map((c) => ({ name: c.name, valueLength: (c.value || "").length }));
 
-    writeFileSync(
-      resolve(dir, "context.txt"),
-      `url: ${url}\nerror: ${error?.message || error}\ncookie names: ${cookieNames}\n`,
-      "utf8"
-    );
-    await page.screenshot({ path: resolve(dir, "page.png"), fullPage: true });
-    console.error(`Login failed at ${url}. Wrote diagnostics to ${dir}/.`);
+    const report = {
+      url,
+      error: error?.message || String(error),
+      cookies: cookieSummary,
+      ...probe
+    };
+    writeFileSync(resolve(dir, "probe.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    console.error(`Login failed at ${url}. Wrote value-free probe to ${dir}/probe.json.`);
   } catch (captureError) {
     console.error(`Could not capture failure diagnostics: ${captureError?.message || captureError}`);
   }
