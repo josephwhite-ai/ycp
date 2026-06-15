@@ -1,0 +1,34 @@
+name: Glue Up Login (Headless)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-login:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: glueup/package-lock.json
+
+      - name: Install dependencies
+        working-directory: glueup
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: glueup
+        run: npx playwright install --with-deps chromium
+
+      - name: Test headless Glue Up login
+        working-directory: glueup
+        env:
+          GLUEUP_EMAIL: ${{ secrets.GLUEUP_EMAIL }}
+          GLUEUP_PASSWORD: ${{ secrets.GLUEUP_PASSWORD }}
+          CI: true
+        run: npm run glueup-login-headless
