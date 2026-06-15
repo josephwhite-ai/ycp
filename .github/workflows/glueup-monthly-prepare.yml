@@ -46,8 +46,9 @@ jobs:
           GLUEUP_EVENTS_FOLDER_ID: ${{ vars.GLUEUP_EVENTS_FOLDER_ID || '1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE' }}
           TIMEZONE: America/New_York
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          INPUT_MONTH: ${{ github.event.inputs.month }}
         run: |
-          MONTH="${{ github.event.inputs.month }}"
+          MONTH="$INPUT_MONTH"
           if [ -z "$MONTH" ]; then
             MONTH="$(date -u +%Y-%m)"
           fi
