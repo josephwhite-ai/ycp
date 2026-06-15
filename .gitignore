@@ -6,3 +6,9 @@ glueup/runs/*
 !glueup/runs/.gitkeep
 __pycache__/
 *.pyc
+whatsapp/whatsapp_session/
+whatsapp/channels.json
+whatsapp/downloaded_images/
+whatsapp/debug_output/
+whatsapp/logs/
+whatsapp/*.png

@@ -6,6 +6,7 @@ This repository contains automation projects for YCP workflows.
 
 - bulletins/: existing bulletin PDF event-extraction scripts.
 - glueup/: Glue Up event-page and campaign preparation agent.
+- whatsapp/: WhatsApp Web media scraper and login helpers.
 
 ## Workflows
 

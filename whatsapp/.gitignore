@@ -1,0 +1,10 @@
+whatsapp_session/
+downloaded_images/
+__pycache__/
+*.pyc
+.env
+channels.json
+credentials.json
+token.json
+*.log
+whatsapp_debug.png
