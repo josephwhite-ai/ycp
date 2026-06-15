@@ -39,25 +39,31 @@ Events default to public unless the source data explicitly says members-only/pri
 
 Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls when you start from `https://ycp.glueup.com/events/draft`.
 
-### End-to-end monthly flow
+### End-to-end flow
 
-Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step must run locally because Glue Up's login is behind Cloudflare. The two halves are bridged by `sync-run`, which pulls the prepared run artifact down to your machine. You specify the month **once**, at `sync-run`; it is persisted to `runs/.active-month` and every later step reads it.
+Each run targets one event, identified by its index — a counter unique across the year (the leading number in a folder like `06 - June 2026 - NHH`). The year defaults to the current year.
 
-```bash
-npm run sync-run -- --month 2026-06    # pull the latest prepared artifact for that month
-npm run glueup-login                    # headed browser, passes Cloudflare, saves .glueup-session/
-npm run create-draft                    # uses the active month automatically
-```
-
-Add `--fresh` to dispatch the prepare workflow and wait for it before downloading, instead of using the latest existing artifact:
+Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step must run locally because Glue Up's login is behind Cloudflare. `create-draft` bridges both halves in one command: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and runs the create flow.
 
 ```bash
-npm run sync-run -- --month 2026-06 --fresh
+npm run create-draft -- --event 6   # sync artifact + login if needed + create draft
+npm run create-draft                 # reuse the active event from a previous run
 ```
 
-`sync-run` requires the `gh` CLI (authenticated). `create-draft` with no `--run`/`--month` uses the active month; passing a `--month` that differs from the active month is rejected so the steps can't drift apart.
+You name the event **once**, at the first `create-draft`; it is persisted to `runs/.active-event` and later runs reuse it. Add `--year 2025` for a past year, and `--fresh` to dispatch the prepare workflow and wait for it before downloading, instead of using the latest existing artifact:
 
-`glueup-login` saves a browser session under `.glueup-session/`. `create-draft` reuses it automatically when `GLUEUP_COOKIE` and `GLUEUP_CSRF_TOKEN` are not set.
+```bash
+npm run create-draft -- --event 6 --fresh
+```
+
+`create-draft` requires the `gh` CLI (authenticated) to pull the artifact. Auth resolves in this order: `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment, then a still-valid saved session under `.glueup-session/` (probed headlessly), then a headed login. The saved session is reused across events, so the browser rarely opens.
+
+The standalone steps are still available if you want to pre-stage or refresh auth separately:
+
+```bash
+npm run sync-run -- --event 6   # download the artifact only
+npm run glueup-login            # refresh the saved browser session only
+```
 
 Manual env override still works:
 
@@ -103,7 +109,7 @@ Local auth options are still supported for debugging:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
-npm run monthly-prepare -- --month 2026-06
+npm run monthly-prepare -- --event 6
 ```
 
 You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallback/debug paths. The direct Google APIs are used instead of `gws`.
@@ -111,9 +117,9 @@ You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallba
 ## Commands
 
 ```bash
-npm run monthly-prepare -- --month 2026-06
-npm run validate -- --run runs/2026-06
-npm run create-draft -- --run runs/2026-06
+npm run monthly-prepare -- --event 6
+npm run validate -- --run runs/evt-2026-006
+npm run create-draft -- --event 6
 npm run glueup-login
 npm run check
 ```
@@ -121,23 +127,22 @@ npm run check
 Useful options:
 
 ```bash
-npm run monthly-prepare -- --month 2026-06 --dry-run
-npm run monthly-prepare -- --month 2026-06 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
-npm run monthly-prepare -- --month 2026-06 --event-type NHH
-npm run monthly-prepare -- --month 2026-06 --event-index 06
+npm run monthly-prepare -- --event 6 --dry-run
+npm run monthly-prepare -- --event 6 --year 2025
+npm run monthly-prepare -- --event 6 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
 ```
 
 ## Event folder naming
 
-Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. If multiple events exist for a month, use `--event-type` or `--event-index` to select the intended event folder.
+Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. The leading number is the event index — a counter unique across the year — and is the only thing needed to select an event (`--event 6`). The month is read back from the folder name to locate that month's summary doc.
 
 ## Deployment direction
 
-Start local, then move the same CLI to GitHub Actions on a monthly cron. If Glue Up browser automation becomes central or more robustness is needed, run it in Cloud Run triggered by Cloud Scheduler.
+Start local, then move the same CLI to GitHub Actions. If Glue Up browser automation becomes central or more robustness is needed, run it in Cloud Run triggered by Cloud Scheduler.
 
 ## GitHub Actions setup
 
-The included workflow is `.github/workflows/glueup-monthly-prepare.yml`.
+The included workflow is `.github/workflows/glueup-monthly-prepare.yml`, run on demand via `workflow_dispatch` (inputs: `event`, optional `year`). `create-draft --fresh` and `sync-run --fresh` dispatch it for you.
 
 Add these repository secrets/variables:
 
@@ -145,7 +150,7 @@ Add these repository secrets/variables:
 - Secret `OPENAI_API_KEY`: optional; deterministic template fill briefs work without it.
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
 
-The scheduled workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact. Creating or publishing Glue Up objects happens in later workflow stages.
+The workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact named `glueup-run-evt-<year>-<index>`. Creating or publishing Glue Up objects happens in later workflow stages.
 
 ## Campaign creation
 

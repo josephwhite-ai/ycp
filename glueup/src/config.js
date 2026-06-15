@@ -47,33 +47,51 @@ export const MONTH_NAMES = [
   "December"
 ];
 
-export function parseMonth(value) {
-  if (!value) {
-    const now = new Date();
-    return {
-      year: now.getFullYear(),
-      month: now.getMonth() + 1,
-      monthName: MONTH_NAMES[now.getMonth()],
-      slug: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
-    };
+// An event is identified by its year and its index (a counter unique across the
+// year, e.g. the 6th event of 2026). The slug keys the run dir, CI artifact, and
+// active-event marker; the `evt-` prefix keeps it from being mistaken for YYYY-MM.
+export function eventSlug(year, index) {
+  return `evt-${year}-${String(index).padStart(3, "0")}`;
+}
+
+export function parseEvent({ event, year } = {}) {
+  if (event === undefined || event === true) {
+    throw new Error("Missing --event <index>. Example: --event 6");
+  }
+  const index = Number(String(event).trim());
+  if (!Number.isInteger(index) || index < 1) {
+    throw new Error(`Invalid --event "${event}". Use a positive integer event index, e.g. 6.`);
   }
 
-  const match = value.match(/^(\d{4})-(\d{2})$/);
+  const resolvedYear = year === undefined ? new Date().getFullYear() : Number(year);
+  if (!Number.isInteger(resolvedYear) || resolvedYear < 2000 || resolvedYear > 9999) {
+    throw new Error(`Invalid --year "${year}". Use a 4-digit year, e.g. 2026.`);
+  }
+
+  return { index, year: resolvedYear, slug: eventSlug(resolvedYear, index) };
+}
+
+export function eventInfoFromSlug(slug) {
+  const match = /^evt-(\d{4})-(\d{1,})$/.exec(slug || "");
   if (!match) {
-    throw new Error(`Invalid --month "${value}". Use YYYY-MM, for example 2026-06.`);
+    throw new Error(`Invalid event slug "${slug}". Expected evt-YYYY-NNN.`);
   }
+  return parseEvent({ event: Number(match[2]), year: Number(match[1]) });
+}
 
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  if (month < 1 || month > 12) {
-    throw new Error(`Invalid --month "${value}". Month must be between 01 and 12.`);
+// Pull the month out of a Drive event folder name like "06 - June 2026 - NHH".
+// The leading number is the event index, not the month, so the month comes from
+// the spelled-out month word.
+export function monthInfoFromFolderName(name, year) {
+  const lower = name.toLowerCase();
+  const monthIndex = MONTH_NAMES.findIndex((m) => lower.includes(m.toLowerCase()));
+  if (monthIndex === -1) {
+    throw new Error(`Could not find a month name in event folder "${name}".`);
   }
-
   return {
     year,
-    month,
-    monthName: MONTH_NAMES[month - 1],
-    slug: `${year}-${String(month).padStart(2, "0")}`
+    month: monthIndex + 1,
+    monthName: MONTH_NAMES[monthIndex]
   };
 }
 
