@@ -10,6 +10,7 @@ export const DEFAULT_SESSION_DIR = ".glueup-session";
 
 const LOGIN_PATH_HINTS = ["/login", "/signin", "/sign-in", "/account/login", "/user/login"];
 const AUTH_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+const CI_AUTH_WAIT_TIMEOUT_MS = 90 * 1000;
 
 export async function resolveGlueUpAuth(options = {}) {
   const cookie = process.env.GLUEUP_COOKIE;
@@ -151,7 +152,12 @@ async function maybeSubmitCredentials(page, options = {}) {
 
 async function waitForAuthenticatedDraftPage(page, options = {}) {
   const headless = options.headless ?? true;
-  const deadline = Date.now() + AUTH_WAIT_TIMEOUT_MS;
+  // CI/headless has no human to finish an interactive login, so fail fast
+  // instead of spinning for the full interactive window.
+  const ephemeral = options.ephemeral ?? Boolean(process.env.CI);
+  const timeout = ephemeral ? CI_AUTH_WAIT_TIMEOUT_MS : AUTH_WAIT_TIMEOUT_MS;
+  const deadline = Date.now() + timeout;
+  let lastLog = 0;
 
   while (Date.now() < deadline) {
     const url = page.url();
@@ -159,7 +165,8 @@ async function waitForAuthenticatedDraftPage(page, options = {}) {
       return;
     }
 
-    if (await isLoginPage(page)) {
+    if (await isLoginPage(page) && Date.now() - lastLog > 10_000) {
+      lastLog = Date.now();
       if (headless) {
         console.log("Waiting for headless Glue Up login to complete...");
       } else {
@@ -284,11 +291,30 @@ async function captureFailureArtifacts(page, error) {
           .filter((i) => /csrf|token/i.test(i.name || ""))
           .map((i) => ({ name: i.name, valueLength: (i.value || "").length }));
         const globalKeys = Object.keys(window).filter((k) => /csrf|token|org/i.test(k));
+        // Value-free form inventory: types/names/placeholders are static UI labels, never user values.
+        const inputs = [...document.querySelectorAll("input")].map((i) => ({
+          type: i.type || null,
+          name: i.name || null,
+          id: i.id || null,
+          placeholder: i.placeholder || null,
+          visible: !!(i.offsetWidth || i.offsetHeight || i.getClientRects().length)
+        }));
+        const buttons = [...document.querySelectorAll("button, input[type=submit]")].map(
+          (b) => (b.innerText || b.value || "").trim().slice(0, 40)
+        );
+        const bodyText = (document.body?.innerText || "").slice(0, 2000);
+        const cloudflareChallenge = /just a moment|checking your browser|cf-challenge|verify you are human/i.test(
+          bodyText
+        );
         return {
+          title: document.title,
           metaCount: document.querySelectorAll("meta").length,
           metaTokenNames,
           tokenInputs,
-          globalKeys
+          globalKeys,
+          inputs,
+          buttons,
+          cloudflareChallenge
         };
       })
       .catch((e) => ({ probeError: e?.message || String(e) }));
