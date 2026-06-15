@@ -146,10 +146,12 @@ async function validate(args) {
 async function createDraft(args) {
   const runDir = await resolveRunDir(args);
 
-  const [manifest, templateSelection] = await Promise.all([
+  const [manifest, templateSelection, event] = await Promise.all([
     readJson(join(runDir, "manifest.json")),
-    readJson(join(runDir, "template-selection.json"))
+    readJson(join(runDir, "template-selection.json")),
+    readJson(join(runDir, "event.json"))
   ]);
+  const config = getConfig({ timezone: args.timezone });
 
   const selected = templateSelection?.selected;
   if (!selected?.glueUp?.eventType || !selected?.glueUp?.blueprintCode) {
@@ -189,8 +191,10 @@ async function createDraft(args) {
 
   const result = await createDraftFromBlueprint({
     templateSelection,
+    event,
+    timezone: config.timezone,
     cookie: auth.cookie,
-    csrfToken: auth.csrfToken,
+    csrfToken: process.env.GLUEUP_CSRF_TOKEN,
     orgId: auth.orgId
   });
   const createdAt = new Date().toISOString();
