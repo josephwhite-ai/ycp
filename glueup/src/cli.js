@@ -3,19 +3,26 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { getConfig, loadDotEnv, parseArgs, parseMonth } from "./config.js";
+import {
+  getConfig,
+  loadDotEnv,
+  parseArgs,
+  parseEvent,
+  eventInfoFromSlug,
+  monthInfoFromFolderName
+} from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc } from "./extract/docsTableExtractor.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
-import { loginGlueUp, resolveGlueUpAuth } from "./glueup/session.js";
+import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
 
 loadDotEnv();
 
 const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
-const ACTIVE_MONTH_FILE = join("runs", ".active-month");
+const ACTIVE_EVENT_FILE = join("runs", ".active-event");
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -41,27 +48,21 @@ try {
 }
 
 async function prepare(args) {
-  const monthInfo = parseMonth(args.month);
+  const eventInfo = parseEvent(args);
   const config = getConfig({
     eventsFolderId: args.eventsFolderId,
     timezone: args.timezone
   });
-  const runDir = args.run || join("runs", monthInfo.slug);
-  const expectedDocName = `${monthInfo.monthName} ${monthInfo.year} - Event Summary Sheet`;
-  const eventFolderFilters = {
-    eventType: args.eventType,
-    eventIndex: args.eventIndex
-  };
+  const runDir = args.run || join("runs", eventInfo.slug);
 
   await mkdir(runDir, { recursive: true });
 
   if (args.dryRun) {
     const plan = {
-      month: monthInfo,
+      event: eventInfo,
       eventsFolderId: config.eventsFolderId,
-      expectedDocName,
-      eventFolderFilters,
-      runDir
+      runDir,
+      note: "The month and summary doc are resolved from the Drive event folder at run time."
     };
     await writeJson(join(runDir, "plan.json"), plan);
     console.log(`Wrote dry-run plan to ${join(runDir, "plan.json")}`);
@@ -69,19 +70,20 @@ async function prepare(args) {
   }
 
   const drive = new GoogleDriveClient();
-  const { yearFolder, monthFolder } = await drive.findMonthlyFolder(
-    config.eventsFolderId,
-    monthInfo,
-    eventFolderFilters
-  );
-  const docFile = await drive.findChildFile(monthFolder.id, expectedDocName);
+  const { yearFolder, eventFolder } = await drive.findEventFolder(config.eventsFolderId, {
+    year: eventInfo.year,
+    index: eventInfo.index
+  });
+  const monthInfo = monthInfoFromFolderName(eventFolder.name, eventInfo.year);
+  const expectedDocName = `${monthInfo.monthName} ${monthInfo.year} - Event Summary Sheet`;
+  const docFile = await drive.findChildFile(eventFolder.id, expectedDocName);
   if (!docFile) {
-    throw new Error(`Could not find "${expectedDocName}" in ${monthFolder.name}.`);
+    throw new Error(`Could not find "${expectedDocName}" in ${eventFolder.name}.`);
   }
 
   const [doc, photos] = await Promise.all([
     drive.getGoogleDoc(docFile.id),
-    drive.listImagesRecursive(monthFolder.id)
+    drive.listImagesRecursive(eventFolder.id)
   ]);
   const event = extractEventFromGoogleDoc(doc);
   const artifacts = await generateArtifacts({ event, photos, config });
@@ -89,11 +91,12 @@ async function prepare(args) {
 
   const manifest = {
     preparedAt: new Date().toISOString(),
+    event: eventInfo,
     month: monthInfo,
     source: {
       eventsFolderId: config.eventsFolderId,
       yearFolder,
-      monthFolder,
+      eventFolder,
       summaryDoc: docFile
     },
     status: validation.ok ? "prepared" : "needs_attention"
@@ -113,7 +116,7 @@ async function prepare(args) {
     await writeFile(join(runDir, "generation-warning.txt"), artifacts.generationWarning, "utf8");
   }
 
-  console.log(`Prepared ${monthInfo.monthName} ${monthInfo.year} run in ${runDir}`);
+  console.log(`Prepared event ${eventInfo.index} (${monthInfo.monthName} ${monthInfo.year}) in ${runDir}`);
   console.log(`Validation: ${validation.ok ? "OK" : "needs attention"}`);
 }
 
@@ -144,7 +147,7 @@ async function validate(args) {
 }
 
 async function createDraft(args) {
-  const runDir = await resolveRunDir(args);
+  const runDir = await prepareRunForDraft(args);
 
   const [manifest, templateSelection, event] = await Promise.all([
     readJson(join(runDir, "manifest.json")),
@@ -184,10 +187,13 @@ async function createDraft(args) {
     return;
   }
 
-  const auth = await resolveGlueUpAuth({ headless: !args.headed });
-  if (auth.source === "playwright") {
-    console.log("Using Playwright session from .glueup-session");
-  }
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const authNotes = {
+    env: "Using GLUEUP_COOKIE/CSRF from the environment.",
+    session: "Using saved Glue Up session.",
+    login: "Logged in to Glue Up."
+  };
+  if (authNotes[auth.source]) console.log(authNotes[auth.source]);
 
   const result = await createDraftFromBlueprint({
     templateSelection,
@@ -226,12 +232,17 @@ async function glueupLogin(args) {
 }
 
 async function syncRun(args) {
-  const { slug } = parseMonth(args.month);
+  const eventInfo = parseEvent(args);
+  await syncEvent(eventInfo, { fresh: args.fresh });
+  console.log("Next: npm run create-draft");
+}
 
-  if (args.fresh) {
-    await triggerPrepare(slug);
+async function syncEvent(eventInfo, { fresh = false } = {}) {
+  if (fresh) {
+    await triggerPrepare(eventInfo);
   }
 
+  const { slug } = eventInfo;
   const artifact = `glueup-run-${slug}`;
   console.log(`Downloading artifact ${artifact} into runs/ ...`);
   gh(["run", "download", "-n", artifact, "-D", "runs"]);
@@ -239,18 +250,26 @@ async function syncRun(args) {
   const manifestPath = join("runs", slug, "manifest.json");
   if (!existsSync(manifestPath)) {
     throw new Error(
-      `Synced artifact did not contain ${manifestPath}. No prepared run for ${slug} was found — run with --fresh to generate it.`
+      `Synced artifact did not contain ${manifestPath}. No prepared run for ${slug} was found — pass --fresh to generate it.`
     );
   }
 
-  await writeFile(ACTIVE_MONTH_FILE, `${slug}\n`, "utf8");
-  console.log(`Active month set to ${slug}. Next: npm run glueup-login && npm run create-draft`);
+  await writeFile(ACTIVE_EVENT_FILE, `${slug}\n`, "utf8");
+  console.log(`Active event set to ${slug}.`);
 }
 
-async function triggerPrepare(slug) {
-  console.log(`Dispatching ${PREPARE_WORKFLOW} for ${slug} ...`);
+async function triggerPrepare(eventInfo) {
+  console.log(`Dispatching ${PREPARE_WORKFLOW} for ${eventInfo.slug} ...`);
   const before = new Set(listPrepareRunIds());
-  gh(["workflow", "run", PREPARE_WORKFLOW, "-f", `month=${slug}`]);
+  gh([
+    "workflow",
+    "run",
+    PREPARE_WORKFLOW,
+    "-f",
+    `event=${eventInfo.index}`,
+    "-f",
+    `year=${eventInfo.year}`
+  ]);
 
   const runId = await waitForNewRun(before);
   console.log(`Watching run ${runId} (this takes a few minutes) ...`);
@@ -291,31 +310,35 @@ function ghCapture(argv) {
   return execFileSync("gh", argv, { encoding: "utf8" });
 }
 
-async function readActiveMonth() {
+async function readActiveEvent() {
   try {
-    return (await readFile(ACTIVE_MONTH_FILE, "utf8")).trim() || null;
+    return (await readFile(ACTIVE_EVENT_FILE, "utf8")).trim() || null;
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
 }
 
-async function resolveRunDir(args) {
+// Resolve the run for create-draft, syncing the artifact from CI when it isn't
+// already on disk (or when --fresh forces a new prepare). The event is named
+// here once via --event; later runs with no --event reuse the active event.
+async function prepareRunForDraft(args) {
   if (args.run) return args.run;
 
-  const active = await readActiveMonth();
-  if (args.month) {
-    const { slug } = parseMonth(args.month);
-    if (active && slug !== active) {
-      throw new Error(
-        `--month ${slug} does not match the active month ${active} from the last sync-run. Re-run sync-run to switch months.`
-      );
-    }
-    return join("runs", slug);
+  const active = await readActiveEvent();
+  const eventInfo = args.event !== undefined ? parseEvent(args) : active && eventInfoFromSlug(active);
+  if (!eventInfo) {
+    throw new Error("No event set. Run: npm run create-draft -- --event <index>");
   }
 
-  if (active) return join("runs", active);
-  throw new Error("No active month. Run: npm run sync-run -- --month YYYY-MM");
+  const runDir = join("runs", eventInfo.slug);
+  if (args.fresh || !existsSync(join(runDir, "manifest.json"))) {
+    await syncEvent(eventInfo, { fresh: args.fresh });
+  } else if (eventInfo.slug !== active) {
+    await writeFile(ACTIVE_EVENT_FILE, `${eventInfo.slug}\n`, "utf8");
+  }
+
+  return runDir;
 }
 
 async function writeJson(path, value) {
@@ -328,7 +351,7 @@ async function readJson(path) {
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new Error(
-        `Missing run file "${path}". Prepare the run first with:\n  npm run monthly-prepare -- --month 2026-06\nOr download the glueup-run artifact from GitHub Actions into glueup/runs/.`
+        `Missing run file "${path}". Prepare the run first with:\n  npm run monthly-prepare -- --event 6\nOr download the glueup-run artifact from GitHub Actions into glueup/runs/.`
       );
     }
     throw error;
@@ -339,21 +362,23 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
-  npm run sync-run -- --month 2026-06 [--fresh]
-  npm run glueup-login
-  npm run create-draft
-  npm run monthly-prepare -- --month 2026-06
-  npm run validate -- --run runs/2026-06
+  npm run create-draft -- --event 6   # syncs the CI artifact, logs in if needed, creates the draft
+  npm run create-draft                 # reuse the active event from a previous run
+
+Other commands:
+  npm run sync-run -- --event 6 [--fresh]   # pre-stage the artifact only
+  npm run glueup-login                      # refresh the saved browser session only
+  npm run monthly-prepare -- --event 6
+  npm run validate -- --run runs/evt-2026-006
 
 Options:
-  --month YYYY-MM
+  --event N          Event index (counter unique across the year)
+  --year YYYY        Defaults to the current year
   --run path
   --events-folder-id id
   --timezone America/New_York
-  --event-type NHH
-  --event-index 06
   --dry-run
-  --fresh           sync-run: dispatch the prepare workflow and wait before downloading
-  --headed          Use a visible browser when refreshing Playwright auth for create-draft
+  --fresh            Dispatch the prepare workflow and wait for it before downloading
+  --headed           (Unused now; login always opens a visible browser when needed)
 `);
 }

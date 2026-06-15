@@ -1,16 +1,16 @@
-name: Monthly Glue Up Prepare
+name: Glue Up Prepare
 
 on:
   workflow_dispatch:
     inputs:
-      month:
-        description: Month to prepare, formatted as YYYY-MM.
+      event:
+        description: Event index to prepare (counter unique across the year).
         required: true
-        default: "2026-06"
-  schedule:
-    # 09:00 UTC is 04:00 America/New_York during standard time and 05:00 during daylight time.
-    # Keep scheduling/publishing inside the app timezone logic; this job only prepares drafts.
-    - cron: "0 9 15 * *"
+        default: "6"
+      year:
+        description: Year of the event. Defaults to the current UTC year.
+        required: false
+        default: ""
 
 jobs:
   prepare:
@@ -39,29 +39,37 @@ jobs:
         run: npm run check
         working-directory: glueup
 
-      - name: Resolve month
-        id: month
+      - name: Resolve event
+        id: event
         env:
-          INPUT_MONTH: ${{ github.event.inputs.month }}
+          INPUT_EVENT: ${{ github.event.inputs.event }}
+          INPUT_YEAR: ${{ github.event.inputs.year }}
         run: |
-          MONTH="$INPUT_MONTH"
-          if [ -z "$MONTH" ]; then
-            MONTH="$(date -u +%Y-%m)"
+          EVENT="$INPUT_EVENT"
+          YEAR="$INPUT_YEAR"
+          if [ -z "$YEAR" ]; then
+            YEAR="$(date -u +%Y)"
           fi
-          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+          SLUG="evt-${YEAR}-$(printf '%03d' "$EVENT")"
+          {
+            echo "event=$EVENT"
+            echo "year=$YEAR"
+            echo "slug=$SLUG"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Prepare monthly run
+      - name: Prepare event run
         working-directory: glueup
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ../credentials/google-service-account.json
           GLUEUP_EVENTS_FOLDER_ID: ${{ vars.GLUEUP_EVENTS_FOLDER_ID || '1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE' }}
           TIMEZONE: America/New_York
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          MONTH: ${{ steps.month.outputs.month }}
-        run: npm run monthly-prepare -- --month "$MONTH"
+          EVENT: ${{ steps.event.outputs.event }}
+          YEAR: ${{ steps.event.outputs.year }}
+        run: npm run monthly-prepare -- --event "$EVENT" --year "$YEAR"
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: glueup-run-${{ steps.month.outputs.month }}
+          name: glueup-run-${{ steps.event.outputs.slug }}
           path: glueup/runs/
