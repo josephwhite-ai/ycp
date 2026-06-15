@@ -15,63 +15,52 @@ export async function generateArtifacts({ event, photos, config }) {
 
 function generateDeterministicArtifacts({ event, photos }) {
   const hero = photos[0] || null;
-  const sessionLines = event.sessions?.length
-    ? event.sessions
-        .map((session) => {
-          const speakers = session.speakers?.length ? ` (${session.speakers.join(", ")})` : "";
-          return `- ${session.time ? `${session.time}: ` : ""}${session.title}${speakers}`;
-        })
-        .join("\n")
-    : "- Agenda details coming soon.";
+  const details = [
+    event.eventDate ? `- Date: ${event.eventDate}` : "",
+    event.venue ? `- Venue: ${event.venue}` : "",
+    event.city ? `- City: ${event.city}` : "",
+    event.registrationUrl
+      ? `- Registration: ${event.registrationUrl}`
+      : "- Registration: to be created in Glue Up"
+  ].filter(Boolean).join("\n");
 
   const webpage = `# ${event.eventName || "Untitled Event"}
 
-Template mode: use the approved Glue Up template for ${event.eventType || "the selected event type"} and populate the fields below.
+Template mode: use the approved Glue Up event template for ${event.eventType || "the selected event type"} and populate the fields below.
 
 ${event.description || "Event description coming soon."}
 
 ## Details
 
-- Date: ${event.eventDate || "TBD"}
-- Venue: ${event.venue || "TBD"}
-- City: ${event.city || "TBD"}
-- Registration: ${event.registrationUrl || "TBD"}
-
-## Program
-
-${sessionLines}
+${details || "- Details coming soon."}
 
 ## Recommended Hero Image
 
 ${hero ? `${hero.name} (${hero.webViewLink || hero.id})` : "No image found."}
 `;
 
-  const weekEmail = `Subject: Join us for ${event.eventName || "our upcoming event"}
+  const campaignTemplateBrief = `# Campaign Template Fill Brief
 
-Hi,
+Do not create a campaign from scratch. Use the approved Glue Up campaign template for this event type as the starting point.
 
-You're invited to ${event.eventName || "our upcoming event"}${event.eventDate ? ` on ${event.eventDate}` : ""}.
+## Event Fields
+
+- Event name: ${event.eventName || "TBD"}
+- Event date: ${event.eventDate || "TBD"}
+${event.venue ? `- Venue: ${event.venue}` : ""}
+${event.city ? `- City: ${event.city}` : ""}
+- Event page URL: to be created after the Glue Up event draft exists
+
+## Source Summary
 
 ${event.description || ""}
-
-Register here: ${event.registrationUrl || "[registration link needed]"}
-`;
-
-  const dayBeforeEmail = `Subject: Tomorrow: ${event.eventName || "event reminder"}
-
-Hi,
-
-This is a quick reminder that ${event.eventName || "the event"} is tomorrow.
-
-${event.venue ? `Location: ${event.venue}` : ""}
-${event.registrationUrl ? `Details and registration: ${event.registrationUrl}` : ""}
 `;
 
   return {
     webpage,
     emails: {
-      weekBefore: weekEmail,
-      dayBefore: dayBeforeEmail
+      weekBefore: campaignTemplateBrief,
+      dayBefore: campaignTemplateBrief
     },
     photoRecommendations: photos.slice(0, 8).map((photo, index) => ({
       rank: index + 1,
@@ -81,7 +70,6 @@ ${event.registrationUrl ? `Details and registration: ${event.registrationUrl}` :
     }))
   };
 }
-
 async function generateWithOpenAI({ event, photos, config }) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -95,13 +83,13 @@ async function generateWithOpenAI({ event, photos, config }) {
         {
           role: "system",
           content:
-            "You generate concise Glue Up webpage and email campaign drafts from structured event data. Return strict JSON only."
+            "You generate concise Glue Up event-template field briefs and campaign-template fill briefs from structured event data. Do not invent campaign templates or standalone email layouts. Return strict JSON only."
         },
         {
           role: "user",
           content: JSON.stringify({
             task:
-              "Create a webpage markdown draft, a one-week-before email, a day-before email, and rank photo recommendations.",
+              "Create a webpage field brief for filling the approved Glue Up event template, a one-week-before campaign-template fill brief, a day-before campaign-template fill brief, and rank photo recommendations. Do not write standalone email campaigns from scratch.",
             event,
             photos: photos.map((photo) => ({
               id: photo.id,

@@ -27,12 +27,15 @@ export function extractEventFromGoogleDoc(doc) {
     sourceDocumentTitle: doc.title || "",
     eventType: pick(fields, ["event type", "program type", "template", "format"]) || "",
     eventName:
-      pick(fields, ["event name", "title", "program title"]) || doc.title?.replace(/ - Event Summary Sheet$/i, "") || "",
+      pick(fields, ["event name", "title", "program title"]) ||
+      deriveEventName(fields) ||
+      doc.title?.replace(/ - Event Summary Sheet$/i, "") ||
+      "",
     eventDate: normalizeDate(pick(fields, ["event date", "date", "program date"]) || ""),
     venue: pick(fields, ["venue", "location", "place"]) || "",
     city: pick(fields, ["city"]) || "",
     registrationUrl: pick(fields, ["registration url", "registration link", "link", "url"]) || "",
-    description: pick(fields, ["description", "overview", "summary"]) || paragraphs.join("\n\n"),
+    description: cleanText(pick(fields, ["description", "overview", "summary"]) || paragraphs.join("\n\n")),
     rawFields: fields,
     sessions
   };
@@ -48,6 +51,7 @@ function extractTable(table) {
         .filter(Boolean)
         .join("\n")
         .trim()
+        .replace(/\u000b/g, "\n")
     )
   );
 }
@@ -127,4 +131,23 @@ function normalizeDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toISOString().slice(0, 10);
+}
+
+function deriveEventName(fields) {
+  const summary = cleanText(pick(fields, ["summary", "description", "overview"]));
+  if (!summary) return "";
+  const firstLine = summary
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return "";
+  return firstLine.replace(/^[^\p{L}\p{N}]+/u, "").trim() || firstLine;
+}
+
+function cleanText(value) {
+  return String(value || "")
+    .replace(/\u000b/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

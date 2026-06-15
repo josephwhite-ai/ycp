@@ -118,3 +118,14 @@ Add these repository secrets/variables:
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
 
 The scheduled workflow prepares drafts and uploads `runs/` as an artifact. Publishing to Glue Up should be a later command after draft generation and validation are stable.
+
+## Campaign creation
+
+After a Glue Up event draft exists, campaign drafts can be created through the internal AJAX endpoint used by the admin UI:
+
+- Endpoint: `/crm/people/ajax`
+- Action: `AddCampaign`
+- Campaign type: `EventInvitationCampaign`
+- Required inputs: Glue Up event ID and campaign title
+
+Session cookies and CSRF tokens must come from fresh environment variables or a Playwright-authenticated browser session. Do not store copied cookies or tokens in source.
