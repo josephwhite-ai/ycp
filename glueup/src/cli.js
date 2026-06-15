@@ -24,7 +24,7 @@ try {
     await createDraft(args);
   } else if (command === "glueup-login") {
     await glueupLogin(args);
-  } else if (command === "test-glueup-login") {
+  } else if (command === "glueup-login-headless") {
     await testGlueupLogin(args);
   } else {
     usage();
@@ -252,7 +252,7 @@ Usage:
   npm run validate -- --run runs/2026-06
   npm run create-draft -- --month 2026-06
   npm run glueup-login
-  npm run test-glueup-login
+  npm run glueup-login-headless
 
 Options:
   --month YYYY-MM
