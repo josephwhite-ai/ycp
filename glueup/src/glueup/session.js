@@ -124,40 +124,24 @@ async function maybeSubmitCredentials(page, options = {}) {
     return;
   }
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const emailInput = page
-      .locator('input[type="email"], input[name="email"], input[name="username"], input[name="login"]')
-      .first();
-    const passwordInput = page.locator('input[type="password"]').first();
+  const emailInput = page.locator('input[type="email"], input[name="email"]').first();
+  const passwordInput = page.locator('input[type="password"]').first();
 
-    if (!(await emailInput.isVisible({ timeout: 3_000 }).catch(() => false))) {
-      if (attempt === 0 && (await isLoginPage(page))) {
-        await page.goto(`${GLUEUP_BASE_URL}/account/login`, {
-          waitUntil: "domcontentloaded",
-          timeout: 60_000
-        });
-        continue;
-      }
-      return;
-    }
-
-    await emailInput.fill(email);
-    await passwordInput.fill(password);
-
-    const submit = page
-      .locator(
-        'button[type="submit"], input[type="submit"], button:has-text("Log in"), button:has-text("Login"), button:has-text("Sign in")'
-      )
-      .first();
-    if (await submit.isVisible({ timeout: 2_000 }).catch(() => false)) {
-      await submit.click();
-    } else {
-      await passwordInput.press("Enter");
-    }
-
-    await page.waitForLoadState("domcontentloaded");
+  if (!(await emailInput.isVisible({ timeout: 3_000 }).catch(() => false))) {
     return;
   }
+
+  await emailInput.fill(email);
+  await passwordInput.fill(password);
+
+  const submit = page.locator('button[type="submit"], input[type="submit"]').first();
+  if (await submit.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await submit.click();
+  } else {
+    await passwordInput.press("Enter");
+  }
+
+  await page.waitForLoadState("domcontentloaded");
 }
 
 async function waitForAuthenticatedDraftPage(page, options = {}) {
@@ -247,33 +231,11 @@ async function extractSession(context, page) {
 
 async function extractCsrfToken(page) {
   const token = await page.evaluate(() => {
-    const meta = document.querySelector(
-      '#csrf-token, meta#csrf-token, meta[name="csrf-token"], meta[name="csrfToken"], meta[name="_csrf"]'
-    );
+    const meta = document.querySelector('meta[name="csrf-token"], meta#csrf-token');
     if (meta?.content) return meta.content;
 
-    const input = document.querySelector(
-      'input[name="token"], input[name="_csrf"], input[name="csrfToken"], input[name="csrf-token"]'
-    );
+    const input = document.querySelector('input[name="token"], input[name="csrf-token"]');
     if (input?.value) return input.value;
-
-    const globals = [window.csrfToken, window.CSRF_TOKEN, window._csrf, window.GLUEUP?.csrfToken];
-    for (const value of globals) {
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-
-    for (const script of document.scripts) {
-      const text = script.textContent || "";
-      const patterns = [
-        /csrfToken["'\s]*[:=]["'\s]*([A-Za-z0-9._-]+)/i,
-        /["']token["']\s*:\s*["']([A-Za-z0-9._-]+)["']/i,
-        /name=["']token["']\s+value=["']([^"']+)["']/i
-      ];
-      for (const pattern of patterns) {
-        const match = text.match(pattern);
-        if (match?.[1]) return match[1];
-      }
-    }
 
     return null;
   });
@@ -292,26 +254,7 @@ async function extractOrgId(page) {
     const activeOrg = document.querySelector(
       ".DropDownListItem.multi-org-block .orgItem[data-id], li.org-active[data-id]"
     );
-    if (activeOrg?.dataset?.id) return activeOrg.dataset.id;
-
-    const globals = [window.orgID, window.orgId, window.ORG_ID, window.GLUEUP?.orgId];
-    for (const value of globals) {
-      if (value != null && String(value).trim()) return String(value).trim();
-    }
-
-    for (const script of document.scripts) {
-      const text = script.textContent || "";
-      const patterns = [
-        /AjaxHandler::setOrgID['"],\s*['"](\d+)['"]/,
-        /orgID["'\s]*[:=]["'\s]*(\d+)/i
-      ];
-      for (const pattern of patterns) {
-        const match = text.match(pattern);
-        if (match?.[1]) return match[1];
-      }
-    }
-
-    return null;
+    return activeOrg?.dataset?.id || null;
   });
 }
 
