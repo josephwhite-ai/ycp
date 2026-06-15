@@ -1,6 +1,6 @@
 # Glue Up Agent
 
-Local-first automation for preparing monthly Glue Up webpage and campaign drafts from Google Drive event data.
+Automation for preparing monthly Glue Up event-page inputs from Google Drive event data, selecting the approved Glue Up event template, and producing campaign-template fill briefs for later campaign creation.
 
 ## First milestone
 
@@ -12,10 +12,10 @@ The current implementation intentionally stops before mutating Glue Up. It:
 4. Extracts table data into `event.json`.
 5. Selects the approved Glue Up template profile for the event type.
 6. Lists likely photo assets.
-7. Generates local field/copy drafts for filling the approved template.
+7. Generates local event-template field briefs and campaign-template fill briefs.
 8. Writes a validation report.
 
-The agent should not design new event pages from scratch. Glue Up is treated as the source of approved templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
+The agent should not design new event pages or email campaigns from scratch. Glue Up is treated as the source of approved event and campaign templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
 
 Current approved template taxonomy:
 
@@ -49,38 +49,32 @@ Session cookies and CSRF tokens are intentionally not stored in source files. Th
 
 ## Auth
 
-Use whichever Google auth path is least painful today:
+Production/GitHub Actions uses a Google service account. The current service account is:
 
-- `GOOGLE_ACCESS_TOKEN`: fastest one-off path.
-- `GOOGLE_APPLICATION_CREDENTIALS`: best for cloud deployments if the Drive folder is shared with the service account.
-- `gcloud auth print-access-token`: convenient local fallback if the right account is logged into `gcloud`.
-
-The connected Codex Google Drive account currently did not list the shared folder, so this code uses direct Google APIs instead of relying on `gws`.
-
-### Fast local token test
-
-If you can get a token from the correct Google account, run:
-
-```bash
-export GOOGLE_ACCESS_TOKEN="paste-token-here"
-npm run prepare -- --month 2026-06
+```text
+sheets@gen-lang-client-0848431620.iam.gserviceaccount.com
 ```
 
-For a durable setup, use the service account `sheets@gen-lang-client-0848431620.iam.gserviceaccount.com`, enable the Google Drive API and Google Docs API in its project, download its JSON key, share the top-level events folder with the service account email, then run:
+Required setup:
+
+1. Enable Google Drive API and Google Docs API in the service account project.
+2. Share the top-level events Drive folder with the service account as a viewer.
+3. Store the full service account JSON in the GitHub Actions secret `GOOGLE_SERVICE_ACCOUNT_JSON`.
+
+The workflow writes that secret to `credentials/google-service-account.json` and runs with:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS=../credentials/google-service-account.json
+```
+
+Local auth options are still supported for debugging:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 npm run prepare -- --month 2026-06
 ```
 
-If using local Google Application Default Credentials, make sure the token includes Drive and Docs read scopes:
-
-```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/documents.readonly
-```
-
-If `gcloud` is not visible in this shell but exists in another terminal, run the command there; it writes to `~/.config/gcloud/application_default_credentials.json`, which this CLI reads directly.
+You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallback/debug paths. The direct Google APIs are used instead of `gws`.
 
 ## Commands
 
@@ -109,15 +103,15 @@ Start local, then move the same CLI to GitHub Actions on a monthly cron. If Glue
 
 ## GitHub Actions setup
 
-The included workflow is `.github/workflows/monthly-prepare.yml`.
+The included workflow is `.github/workflows/glueup-monthly-prepare.yml`.
 
 Add these repository secrets/variables:
 
 - Secret `GOOGLE_SERVICE_ACCOUNT_JSON`: full service account JSON.
-- Secret `OPENAI_API_KEY`: optional; deterministic templates work without it.
+- Secret `OPENAI_API_KEY`: optional; deterministic template fill briefs work without it.
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
 
-The scheduled workflow prepares drafts and uploads `runs/` as an artifact. Publishing to Glue Up should be a later command after draft generation and validation are stable.
+The scheduled workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact. Creating or publishing Glue Up objects happens in later workflow stages.
 
 ## Campaign creation
 

@@ -14,7 +14,7 @@ export const EVENT_TYPES = [
         }
       }
     ],
-    requiredFields: ["eventName", "eventDate", "registrationUrl", "venue"]
+    requiredFields: ["eventName", "eventDate", "venue"]
   },
   {
     key: "executive-speaker-series",
@@ -31,7 +31,7 @@ export const EVENT_TYPES = [
         }
       }
     ],
-    requiredFields: ["eventName", "eventDate", "registrationUrl", "venue", "speakers"]
+    requiredFields: ["eventName", "eventDate", "venue", "speakers"]
   },
   {
     key: "executive-panel-discussion",
@@ -57,7 +57,7 @@ export const EVENT_TYPES = [
         }
       }
     ],
-    requiredFields: ["eventName", "eventDate", "registrationUrl", "speakers"]
+    requiredFields: ["eventName", "eventDate", "speakers"]
   },
   {
     key: "networking-happy-hour",
@@ -83,7 +83,7 @@ export const EVENT_TYPES = [
         }
       }
     ],
-    requiredFields: ["eventName", "eventDate", "registrationUrl", "venue"]
+    requiredFields: ["eventName", "eventDate", "venue"]
   }
 ];
 
