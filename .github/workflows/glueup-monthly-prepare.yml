@@ -39,6 +39,17 @@ jobs:
         run: npm run check
         working-directory: glueup
 
+      - name: Resolve month
+        id: month
+        env:
+          INPUT_MONTH: ${{ github.event.inputs.month }}
+        run: |
+          MONTH="$INPUT_MONTH"
+          if [ -z "$MONTH" ]; then
+            MONTH="$(date -u +%Y-%m)"
+          fi
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+
       - name: Prepare monthly run
         working-directory: glueup
         env:
@@ -46,16 +57,11 @@ jobs:
           GLUEUP_EVENTS_FOLDER_ID: ${{ vars.GLUEUP_EVENTS_FOLDER_ID || '1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE' }}
           TIMEZONE: America/New_York
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          INPUT_MONTH: ${{ github.event.inputs.month }}
-        run: |
-          MONTH="$INPUT_MONTH"
-          if [ -z "$MONTH" ]; then
-            MONTH="$(date -u +%Y-%m)"
-          fi
-          npm run monthly-prepare -- --month "$MONTH"
+          MONTH: ${{ steps.month.outputs.month }}
+        run: npm run monthly-prepare -- --month "$MONTH"
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: glueup-run
+          name: glueup-run-${{ steps.month.outputs.month }}
           path: glueup/runs/

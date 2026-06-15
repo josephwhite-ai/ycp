@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { getConfig, loadDotEnv, parseArgs, parseMonth } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
@@ -11,6 +13,9 @@ import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draf
 import { loginGlueUp, resolveGlueUpAuth } from "./glueup/session.js";
 
 loadDotEnv();
+
+const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
+const ACTIVE_MONTH_FILE = join("runs", ".active-month");
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -24,6 +29,8 @@ try {
     await createDraft(args);
   } else if (command === "glueup-login") {
     await glueupLogin(args);
+  } else if (command === "sync-run") {
+    await syncRun(args);
   } else {
     usage();
     process.exit(command ? 1 : 0);
@@ -137,7 +144,7 @@ async function validate(args) {
 }
 
 async function createDraft(args) {
-  const runDir = resolveRunDir(args);
+  const runDir = await resolveRunDir(args);
 
   const [manifest, templateSelection] = await Promise.all([
     readJson(join(runDir, "manifest.json")),
@@ -214,10 +221,97 @@ async function glueupLogin(args) {
   console.log(`Draft workspace: https://ycp.glueup.com/events/draft`);
 }
 
-function resolveRunDir(args) {
+async function syncRun(args) {
+  const { slug } = parseMonth(args.month);
+
+  if (args.fresh) {
+    await triggerPrepare(slug);
+  }
+
+  const artifact = `glueup-run-${slug}`;
+  console.log(`Downloading artifact ${artifact} into runs/ ...`);
+  gh(["run", "download", "-n", artifact, "-D", "runs"]);
+
+  const manifestPath = join("runs", slug, "manifest.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(
+      `Synced artifact did not contain ${manifestPath}. No prepared run for ${slug} was found — run with --fresh to generate it.`
+    );
+  }
+
+  await writeFile(ACTIVE_MONTH_FILE, `${slug}\n`, "utf8");
+  console.log(`Active month set to ${slug}. Next: npm run glueup-login && npm run create-draft`);
+}
+
+async function triggerPrepare(slug) {
+  console.log(`Dispatching ${PREPARE_WORKFLOW} for ${slug} ...`);
+  const before = new Set(listPrepareRunIds());
+  gh(["workflow", "run", PREPARE_WORKFLOW, "-f", `month=${slug}`]);
+
+  const runId = await waitForNewRun(before);
+  console.log(`Watching run ${runId} (this takes a few minutes) ...`);
+  gh(["run", "watch", String(runId), "--exit-status"]);
+}
+
+function listPrepareRunIds() {
+  const out = ghCapture([
+    "run",
+    "list",
+    "--workflow",
+    PREPARE_WORKFLOW,
+    "--event",
+    "workflow_dispatch",
+    "--limit",
+    "20",
+    "--json",
+    "databaseId"
+  ]);
+  return JSON.parse(out).map((r) => r.databaseId);
+}
+
+async function waitForNewRun(before) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const current = listPrepareRunIds();
+    const fresh = current.find((id) => !before.has(id));
+    if (fresh) return fresh;
+  }
+  throw new Error("Timed out waiting for the dispatched prepare run to appear.");
+}
+
+function gh(argv) {
+  execFileSync("gh", argv, { stdio: "inherit" });
+}
+
+function ghCapture(argv) {
+  return execFileSync("gh", argv, { encoding: "utf8" });
+}
+
+async function readActiveMonth() {
+  try {
+    return (await readFile(ACTIVE_MONTH_FILE, "utf8")).trim() || null;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function resolveRunDir(args) {
   if (args.run) return args.run;
-  if (args.month) return join("runs", parseMonth(args.month).slug);
-  throw new Error("Missing --run or --month.");
+
+  const active = await readActiveMonth();
+  if (args.month) {
+    const { slug } = parseMonth(args.month);
+    if (active && slug !== active) {
+      throw new Error(
+        `--month ${slug} does not match the active month ${active} from the last sync-run. Re-run sync-run to switch months.`
+      );
+    }
+    return join("runs", slug);
+  }
+
+  if (active) return join("runs", active);
+  throw new Error("No active month. Run: npm run sync-run -- --month YYYY-MM");
 }
 
 async function writeJson(path, value) {
@@ -241,10 +335,11 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
+  npm run sync-run -- --month 2026-06 [--fresh]
+  npm run glueup-login
+  npm run create-draft
   npm run monthly-prepare -- --month 2026-06
   npm run validate -- --run runs/2026-06
-  npm run create-draft -- --month 2026-06
-  npm run glueup-login
 
 Options:
   --month YYYY-MM
@@ -254,6 +349,7 @@ Options:
   --event-type NHH
   --event-index 06
   --dry-run
+  --fresh           sync-run: dispatch the prepare workflow and wait before downloading
   --headed          Use a visible browser when refreshing Playwright auth for create-draft
 `);
 }
