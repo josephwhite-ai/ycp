@@ -69,7 +69,7 @@ Headless login smoke test (local or CI):
 ```bash
 export GLUEUP_EMAIL="..."
 export GLUEUP_PASSWORD="..."
-npm run test-glueup-login
+npm run glueup-login-headless
 ```
 
 GitHub Actions workflow: `.github/workflows/glueup-test-login.yml` (requires `GLUEUP_EMAIL` and `GLUEUP_PASSWORD` secrets). It prints org ID and token lengths only, not secrets.

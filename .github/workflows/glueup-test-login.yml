@@ -31,4 +31,4 @@ jobs:
           GLUEUP_EMAIL: ${{ secrets.GLUEUP_EMAIL }}
           GLUEUP_PASSWORD: ${{ secrets.GLUEUP_PASSWORD }}
           CI: true
-        run: npm run test-glueup-login
+        run: npm run glueup-login-headless
