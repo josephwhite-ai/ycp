@@ -274,9 +274,13 @@ async function captureFailureArtifacts(page, error) {
     const url = page.url();
     const html = await page.content().catch(() => "<unavailable>");
     writeFileSync(resolve(dir, "page.html"), html, "utf8");
+
+    const cookies = await page.context().cookies(GLUEUP_BASE_URL).catch(() => []);
+    const cookieNames = cookies.map((c) => c.name).join(", ") || "<none>";
+
     writeFileSync(
       resolve(dir, "context.txt"),
-      `url: ${url}\nerror: ${error?.message || error}\n`,
+      `url: ${url}\nerror: ${error?.message || error}\ncookie names: ${cookieNames}\n`,
       "utf8"
     );
     await page.screenshot({ path: resolve(dir, "page.png"), fullPage: true });

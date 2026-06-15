@@ -40,3 +40,4 @@ jobs:
           name: glueup-login-diagnostics
           path: glueup/.glueup-debug/
           if-no-files-found: ignore
+          include-hidden-files: true
