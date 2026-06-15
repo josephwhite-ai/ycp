@@ -7,6 +7,7 @@
     "monthly-prepare": "node src/cli.js prepare",
     "validate": "node src/cli.js validate",
     "create-draft": "node src/cli.js create-draft",
+    "sync-run": "node src/cli.js sync-run",
     "glueup-login": "node src/cli.js glueup-login",
     "check": "node --check src/cli.js && node --check src/config.js && node --check src/drive/googleDriveClient.js && node --check src/extract/docsTableExtractor.js && node --check src/generate/contentGenerator.js && node --check src/glueup/draftCreate.js && node --check src/glueup/campaignCreate.js && node --check src/glueup/session.js && node --check src/templates/eventTypes.js && node --check src/validate/validators.js"
   },

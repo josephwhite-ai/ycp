@@ -39,12 +39,23 @@ Events default to public unless the source data explicitly says members-only/pri
 
 Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls when you start from `https://ycp.glueup.com/events/draft`.
 
-Preferred local auth:
+### End-to-end monthly flow
+
+Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step must run locally because Glue Up's login is behind Cloudflare. The two halves are bridged by `sync-run`, which pulls the prepared run artifact down to your machine. You specify the month **once**, at `sync-run`; it is persisted to `runs/.active-month` and every later step reads it.
 
 ```bash
-npm run glueup-login
-npm run create-draft -- --run runs/2026-06
+npm run sync-run -- --month 2026-06    # pull the latest prepared artifact for that month
+npm run glueup-login                    # headed browser, passes Cloudflare, saves .glueup-session/
+npm run create-draft                    # uses the active month automatically
 ```
+
+Add `--fresh` to dispatch the prepare workflow and wait for it before downloading, instead of using the latest existing artifact:
+
+```bash
+npm run sync-run -- --month 2026-06 --fresh
+```
+
+`sync-run` requires the `gh` CLI (authenticated). `create-draft` with no `--run`/`--month` uses the active month; passing a `--month` that differs from the active month is rejected so the steps can't drift apart.
 
 `glueup-login` saves a browser session under `.glueup-session/`. `create-draft` reuses it automatically when `GLUEUP_COOKIE` and `GLUEUP_CSRF_TOKEN` are not set.
 
