@@ -64,15 +64,7 @@ export GLUEUP_PASSWORD="..."
 npm run glueup-login
 ```
 
-Headless login smoke test (local or CI):
-
-```bash
-export GLUEUP_EMAIL="..."
-export GLUEUP_PASSWORD="..."
-npm run glueup-login-headless
-```
-
-GitHub Actions workflow: `.github/workflows/glueup-login-headless.yml` (requires `GLUEUP_EMAIL` and `GLUEUP_PASSWORD` secrets). It prints org ID and token lengths only, not secrets.
+Glue Up's login sits behind Cloudflare bot management, so headless/CI login is blocked — `glueup-login` must run with a visible browser (the default). There is no CI login workflow. For automation, capture `GLUEUP_COOKIE` and `GLUEUP_CSRF_TOKEN` from a local `glueup-login` and export them (or store as repo secrets), refreshing when the session expires.
 
 Session cookies and CSRF tokens are intentionally not stored in source files. They expire and should be treated like passwords.
 

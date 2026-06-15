@@ -180,29 +180,6 @@ async function waitForAuthenticatedDraftPage(page, options = {}) {
   throw new Error(`Timed out waiting for authenticated Glue Up session at ${GLUEUP_DRAFT_URL}.`);
 }
 
-export async function testHeadlessLogin(options = {}) {
-  if (!options.email && !process.env.GLUEUP_EMAIL) {
-    throw new Error("GLUEUP_EMAIL is required for headless login test.");
-  }
-  if (!options.password && !process.env.GLUEUP_PASSWORD) {
-    throw new Error("GLUEUP_PASSWORD is required for headless login test.");
-  }
-
-  const auth = await getGlueUpSession({
-    ...options,
-    headless: true,
-    ephemeral: true
-  });
-
-  return {
-    ok: true,
-    url: GLUEUP_DRAFT_URL,
-    orgId: auth.orgId,
-    cookieCount: auth.cookie.split(";").filter(Boolean).length,
-    csrfTokenLength: auth.csrfToken.length
-  };
-}
-
 function isDraftWorkspaceUrl(url) {
   try {
     const parsed = new URL(url);
@@ -227,21 +204,19 @@ async function isLoginPage(page) {
 }
 
 async function extractSession(context, page) {
-  await page.waitForSelector("meta#csrf-token, meta[name='csrf-token']", { timeout: 30_000 });
-
   const cookies = await context.cookies(GLUEUP_BASE_URL);
   const cookie = cookies.map((entry) => `${entry.name}=${entry.value}`).join("; ");
   if (!cookie) {
     throw new Error("Glue Up session has no cookies. Run `npm run glueup-login` first.");
   }
 
-  const csrfToken = await extractCsrfToken(page);
+  const csrfToken = await extractCsrfToken(page, cookies);
   const orgId = (await extractOrgId(page)) || process.env.GLUEUP_ORG_ID || DEFAULT_ORG_ID;
 
   return { cookie, csrfToken, orgId };
 }
 
-async function extractCsrfToken(page) {
+async function extractCsrfToken(page, cookies = []) {
   const token = await page.evaluate(() => {
     const meta = document.querySelector('meta[name="csrf-token"], meta#csrf-token');
     if (meta?.content) return meta.content;
@@ -252,13 +227,17 @@ async function extractCsrfToken(page) {
     return null;
   });
 
-  if (!token) {
+  // Glue Up's SPA may not expose a csrf meta/input; the TOKEN cookie carries it.
+  const fallback = cookies.find((c) => c.name === "TOKEN")?.value || null;
+  const resolved = token || fallback;
+
+  if (!resolved) {
     throw new Error(
       `Could not find a CSRF token on ${GLUEUP_DRAFT_URL}. Set GLUEUP_CSRF_TOKEN or re-run \`npm run glueup-login\`.`
     );
   }
 
-  return token;
+  return resolved;
 }
 
 async function extractOrgId(page) {

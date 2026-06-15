@@ -8,7 +8,7 @@ import { generateArtifacts } from "./generate/contentGenerator.js";
 import { validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
-import { loginGlueUp, resolveGlueUpAuth, testHeadlessLogin } from "./glueup/session.js";
+import { loginGlueUp, resolveGlueUpAuth } from "./glueup/session.js";
 
 loadDotEnv();
 
@@ -24,8 +24,6 @@ try {
     await createDraft(args);
   } else if (command === "glueup-login") {
     await glueupLogin(args);
-  } else if (command === "glueup-login-headless") {
-    await testGlueupLogin(args);
   } else {
     usage();
     process.exit(command ? 1 : 0);
@@ -216,11 +214,6 @@ async function glueupLogin(args) {
   console.log(`Draft workspace: https://ycp.glueup.com/events/draft`);
 }
 
-async function testGlueupLogin() {
-  const result = await testHeadlessLogin();
-  console.log(JSON.stringify(result, null, 2));
-}
-
 function resolveRunDir(args) {
   if (args.run) return args.run;
   if (args.month) return join("runs", parseMonth(args.month).slug);
@@ -252,7 +245,6 @@ Usage:
   npm run validate -- --run runs/2026-06
   npm run create-draft -- --month 2026-06
   npm run glueup-login
-  npm run glueup-login-headless
 
 Options:
   --month YYYY-MM
@@ -263,6 +255,5 @@ Options:
   --event-index 06
   --dry-run
   --headed          Use a visible browser when refreshing Playwright auth for create-draft
-  --headless        Run glueup-login without opening a browser window
 `);
 }
