@@ -58,25 +58,51 @@ Copied cookies/tokens from browser devtools are examples only. Treat them like p
 - `src/glueup/campaignCreate.js`
   - Creates a campaign draft through `/crm/people/ajax` with action `AddCampaign` and campaign type `EventInvitationCampaign`.
 
-These helpers build the request shape only. They still need to be wired into CLI commands and fed with fresh auth/session state.
+These helpers build the request shape only. `create-draft` is wired into the CLI; campaign creation still needs a CLI command.
 
 ## Recommended Next Step
 
-Build a `create-draft` CLI command:
+Wire campaign creation into a CLI command that reuses the Playwright session layer and the existing `campaignCreate.js` helper.
+
+## Playwright Session Auth
+
+Glue Up draft creation normally starts from `https://ycp.glueup.com/events/draft`. The Playwright layer uses that page as the authenticated workspace.
+
+```bash
+npm run glueup-login
+```
+
+Behavior:
+
+1. Opens a browser profile saved under `.glueup-session/` (gitignored).
+2. Navigates to `https://ycp.glueup.com/events/draft`.
+3. Signs in manually, or with `GLUEUP_EMAIL` / `GLUEUP_PASSWORD` when Glue Up shows a login form.
+4. Waits until `/events/draft` is loaded, then captures cookies and the CSRF token from the page.
+
+`create-draft` will use `GLUEUP_COOKIE` and `GLUEUP_CSRF_TOKEN` when set; otherwise it refreshes auth from the saved Playwright session headlessly. Use `--headed` if headless refresh fails.
+
+## `create-draft` Command
 
 ```bash
 npm run create-draft -- --run runs/2026-06
 ```
 
-Expected behavior:
+Behavior:
 
-1. Read `manifest.json`, `event.json`, and `template-selection.json`.
-2. Use `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
-3. Call the draft-create AJAX helper with fresh Glue Up session auth.
-4. Parse and persist the returned Glue Up event ID/URL into `manifest.json`.
-5. Do not create campaigns yet.
+1. Reads `manifest.json` and `template-selection.json` from the run directory.
+2. Uses `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
+3. Calls the draft-create AJAX helper with `GLUEUP_COOKIE`, `GLUEUP_CSRF_TOKEN`, and optional `GLUEUP_ORG_ID`.
+4. Parses the response and persists the Glue Up event ID/URL into `manifest.json` under `glueUp`.
+5. Writes the raw AJAX response to `draft-create-response.json`.
+6. Does not create campaigns yet.
 
-After that, add a Playwright login/session layer so the system can obtain fresh cookies/CSRF token without pasting curl output.
+Dry run (no Glue Up auth required):
+
+```bash
+npm run create-draft -- --run runs/2026-06 --dry-run
+```
+
+This writes `draft-create-plan.json` with the blueprint and request shape that would be sent.
 
 ## Validation Notes
 

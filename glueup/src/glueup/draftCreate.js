@@ -1,6 +1,42 @@
 const DEFAULT_BASE_URL = "https://ycp.glueup.com";
 const DEFAULT_ORG_ID = "5828";
 
+function toAbsoluteUrl(value) {
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith("/")) return `${DEFAULT_BASE_URL}${value}`;
+  return `${DEFAULT_BASE_URL}/${value}`;
+}
+
+export function parseDraftCreateResult(response) {
+  if (!response || typeof response !== "object") {
+    throw new Error("Glue Up draft create returned an unexpected response.");
+  }
+
+  if (response.success === false || response.status === "error") {
+    const message =
+      response.message || response.error || "Glue Up rejected the draft create request.";
+    throw new Error(message);
+  }
+
+  const data = response.data && typeof response.data === "object" ? response.data : response;
+  const eventId = data.eventId != null ? String(data.eventId) : data.id != null ? String(data.id) : null;
+  const redirect = data.redirect || data.url || null;
+  const eventUrl = toAbsoluteUrl(redirect) || (eventId ? `${DEFAULT_BASE_URL}/events/edit/${eventId}` : null);
+
+  if (!eventId && !eventUrl) {
+    throw new Error(
+      `Glue Up draft create succeeded but no event ID or URL was found in the response: ${JSON.stringify(response)}`
+    );
+  }
+
+  return {
+    eventId,
+    eventUrl,
+    raw: response
+  };
+}
+
 export function buildDraftCreateRequest({ templateSelection, csrfToken, orgId = DEFAULT_ORG_ID }) {
   const selected = templateSelection?.selected;
   const glueUp = selected?.glueUp;
@@ -61,9 +97,12 @@ export async function createDraftFromBlueprint({
     throw new Error(`Glue Up draft create failed ${response.status}: ${text}`);
   }
 
+  let payload;
   try {
-    return JSON.parse(text);
+    payload = JSON.parse(text);
   } catch {
-    return { raw: text };
+    throw new Error(`Glue Up draft create returned non-JSON response: ${text}`);
   }
+
+  return parseDraftCreateResult(payload);
 }

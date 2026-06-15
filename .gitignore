@@ -4,6 +4,7 @@ credentials/
 *.log
 glueup/runs/*
 !glueup/runs/.gitkeep
+glueup/.glueup-session/
 __pycache__/
 *.pyc
 whatsapp/whatsapp_session/
