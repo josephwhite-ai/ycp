@@ -1,21 +1,6 @@
 const DEFAULT_BASE_URL = "https://ycp.glueup.com";
 const DEFAULT_ORG_ID = "5828";
 
-function asString(value) {
-  if (value == null) return null;
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  if (typeof value === "object" && value.code != null) return String(value.code);
-  return null;
-}
-
-function firstString(...values) {
-  for (const value of values) {
-    const normalized = asString(value);
-    if (normalized) return normalized;
-  }
-  return null;
-}
-
 function toAbsoluteUrl(value) {
   if (!value) return null;
   if (/^https?:\/\//i.test(value)) return value;
@@ -30,34 +15,14 @@ export function parseDraftCreateResult(response) {
 
   if (response.success === false || response.status === "error") {
     const message =
-      response.message ||
-      response.error ||
-      response.errors?.join?.(", ") ||
-      "Glue Up rejected the draft create request.";
+      response.message || response.error || "Glue Up rejected the draft create request.";
     throw new Error(message);
   }
 
   const data = response.data && typeof response.data === "object" ? response.data : response;
-  const eventId = firstString(
-    data.eventId,
-    data.id,
-    data.event?.id,
-    data.event?.code,
-    data.code,
-    response.eventId,
-    response.id
-  );
-
-  const redirectOrUrl = firstString(
-    data.redirect,
-    data.url,
-    data.eventUrl,
-    data.editUrl,
-    response.redirect,
-    response.url
-  );
-
-  const eventUrl = toAbsoluteUrl(redirectOrUrl) || (eventId ? `${DEFAULT_BASE_URL}/events/edit/${eventId}` : null);
+  const eventId = data.eventId != null ? String(data.eventId) : data.id != null ? String(data.id) : null;
+  const redirect = data.redirect || data.url || null;
+  const eventUrl = toAbsoluteUrl(redirect) || (eventId ? `${DEFAULT_BASE_URL}/events/edit/${eventId}` : null);
 
   if (!eventId && !eventUrl) {
     throw new Error(

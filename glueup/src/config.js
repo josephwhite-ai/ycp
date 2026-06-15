@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 const DEFAULT_EVENTS_FOLDER_ID = "1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE";
 const DEFAULT_TIMEZONE = "America/New_York";
@@ -98,18 +98,4 @@ export function parseArgs(argv) {
     }
   }
   return args;
-}
-
-export function resolveRunDir(runArg) {
-  if (!runArg) throw new Error("Missing --run path.");
-
-  if (/^\d{4}-\d{2}$/.test(runArg)) {
-    return join("runs", runArg);
-  }
-
-  if (!existsSync(runArg) && existsSync(join("runs", runArg))) {
-    return join("runs", runArg);
-  }
-
-  return runArg;
 }
