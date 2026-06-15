@@ -35,6 +35,10 @@ async function prepare(args) {
   });
   const runDir = args.run || join("runs", monthInfo.slug);
   const expectedDocName = `${monthInfo.monthName} ${monthInfo.year} - Event Summary Sheet`;
+  const eventFolderFilters = {
+    eventType: args.eventType,
+    eventIndex: args.eventIndex
+  };
 
   await mkdir(runDir, { recursive: true });
 
@@ -43,6 +47,7 @@ async function prepare(args) {
       month: monthInfo,
       eventsFolderId: config.eventsFolderId,
       expectedDocName,
+      eventFolderFilters,
       runDir
     };
     await writeJson(join(runDir, "plan.json"), plan);
@@ -53,7 +58,8 @@ async function prepare(args) {
   const drive = new GoogleDriveClient();
   const { yearFolder, monthFolder } = await drive.findMonthlyFolder(
     config.eventsFolderId,
-    monthInfo
+    monthInfo,
+    eventFolderFilters
   );
   const docFile = await drive.findChildFile(monthFolder.id, expectedDocName);
   if (!docFile) {
@@ -144,6 +150,8 @@ Options:
   --run path
   --events-folder-id id
   --timezone America/New_York
+  --event-type NHH
+  --event-index 06
   --dry-run
 `);
 }

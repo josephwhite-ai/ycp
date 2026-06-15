@@ -95,7 +95,13 @@ Useful options:
 ```bash
 npm run prepare -- --month 2026-06 --dry-run
 npm run prepare -- --month 2026-06 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
+npm run prepare -- --month 2026-06 --event-type NHH
+npm run prepare -- --month 2026-06 --event-index 06
 ```
+
+## Event folder naming
+
+Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. If multiple events exist for a month, use `--event-type` or `--event-index` to select the intended event folder.
 
 ## Deployment direction
 
