@@ -1,6 +1,6 @@
 import { selectEventTemplate } from "../templates/eventTypes.js";
 
-const REQUIRED_EVENT_FIELDS = ["eventName", "eventDate", "registrationUrl"];
+const REQUIRED_EVENT_FIELDS = ["eventName", "eventDate"];
 
 export function validateEventRun({ event, artifacts, config }) {
   const errors = [];
@@ -13,6 +13,10 @@ export function validateEventRun({ event, artifacts, config }) {
 
   if (!event.venue && !event.city) {
     warnings.push("Missing venue/city. This may be fine for virtual events, but should be checked.");
+  }
+
+  if (!event.registrationUrl) {
+    warnings.push("Registration URL is not set yet; it should be filled after the Glue Up event draft is created.");
   }
 
   if (!templateSelection.selected) {
