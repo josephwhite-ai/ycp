@@ -57,7 +57,7 @@ export class GoogleDriveClient {
     );
   }
 
-  async findMonthlyFolder(eventsFolderId, monthInfo) {
+  async findMonthlyFolder(eventsFolderId, monthInfo, filters = {}) {
     const yearFolder = await this.findChildFolder(eventsFolderId, [
       normalizeName(String(monthInfo.year)),
       normalizeName(`${monthInfo.year} Events`)
@@ -66,18 +66,15 @@ export class GoogleDriveClient {
       throw new Error(`Could not find Drive year folder for ${monthInfo.year}.`);
     }
 
-    const monthPadded = String(monthInfo.month).padStart(2, "0");
-    const monthCandidates = [
-      monthInfo.monthName,
-      `${monthPadded} ${monthInfo.monthName}`,
-      `${monthPadded} - ${monthInfo.monthName}`,
-      `${monthInfo.monthName} ${monthInfo.year}`,
-      `${monthPadded}. ${monthInfo.monthName}`
-    ].map(normalizeName);
-
-    const monthFolder = await this.findChildFolder(yearFolder.id, monthCandidates);
+    const folders = (await this.listChildren(yearFolder.id))
+      .filter((file) => file.mimeType === "application/vnd.google-apps.folder")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const monthFolder = findEventFolderForMonth(folders, monthInfo, filters);
     if (!monthFolder) {
-      throw new Error(`Could not find Drive month folder for ${monthInfo.monthName} ${monthInfo.year}.`);
+      const available = folders.map((folder) => folder.name).join(", ") || "none";
+      throw new Error(
+        `Could not find Drive event folder for ${monthInfo.monthName} ${monthInfo.year}. Available ${monthInfo.year} folders: ${available}`
+      );
     }
 
     return { yearFolder, monthFolder };
@@ -221,4 +218,32 @@ function base64Url(value) {
 
 function normalizeName(name) {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function findEventFolderForMonth(folders, monthInfo, filters = {}) {
+  const monthPadded = String(monthInfo.month).padStart(2, "0");
+  const monthYear = normalizeName(`${monthInfo.monthName} ${monthInfo.year}`);
+  const eventType = normalizeName(filters.eventType || "");
+  const eventIndex = filters.eventIndex ? String(filters.eventIndex).padStart(2, "0") : "";
+
+  const exactCandidates = [
+    monthInfo.monthName,
+    `${monthPadded} ${monthInfo.monthName}`,
+    `${monthPadded} - ${monthInfo.monthName}`,
+    `${monthPadded} - ${monthInfo.monthName} ${monthInfo.year}`,
+    `${monthInfo.monthName} ${monthInfo.year}`,
+    `${monthPadded}. ${monthInfo.monthName}`
+  ].map(normalizeName);
+
+  const matches = folders.filter((folder) => {
+    const name = normalizeName(folder.name);
+    const exactMatch = exactCandidates.includes(name);
+    const eventFolderMatch = /^\d+ - /.test(name) && name.includes(monthYear);
+    if (!exactMatch && !eventFolderMatch) return false;
+    if (eventIndex && !name.startsWith(`${eventIndex} -`)) return false;
+    if (eventType && !name.endsWith(`- ${eventType}`) && !name.includes(` ${eventType}`)) return false;
+    return true;
+  });
+
+  return matches[0] || null;
 }
