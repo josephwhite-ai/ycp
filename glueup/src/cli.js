@@ -24,7 +24,7 @@ import {
   extractCampaignSetupPayloads,
   scheduleCampaign
 } from "./glueup/campaignCreate.js";
-import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
+import { ensureGlueUpAuth, GLUEUP_BASE_URL, loginGlueUp } from "./glueup/session.js";
 
 // Two invitation campaigns per event — one to send a week before, one a day
 // before. They're created as drafts now (pre-publish) so they can be reviewed
@@ -190,6 +190,7 @@ async function ensureWorkflow(args) {
 async function populateWorkflow(args) {
   const runDir = resolveRunDir(args);
   await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
   await populateDraft({ ...args, run: runDir });
   await populateCampaigns({ ...args, run: runDir });
   const updated = await readJson(join(runDir, "manifest.json"));
@@ -224,6 +225,13 @@ async function ensureDraft(args, options = {}) {
     throw new Error("template-selection.json is missing a selected Glue Up blueprint.");
   }
   const selectedGlueUp = selected.glueUp;
+  let localAuth = options.auth || null;
+  const getAuth = async () => {
+    if (localAuth) return localAuth;
+    localAuth = await ensureGlueUpAuth({ headless: !args.headed });
+    printAuthNote(localAuth);
+    return localAuth;
+  };
 
   if (manifest?.glueUp?.eventId) {
     assertGlueUpTemplateCompatible({
@@ -231,6 +239,13 @@ async function ensureDraft(args, options = {}) {
       expected: selectedGlueUp,
       source: join(runDir, "manifest.json")
     });
+    if (!args.dryRun) {
+      await assertGlueUpEventIsDraft({
+        eventId: manifest.glueUp.eventId,
+        cookie: (await getAuth()).cookie,
+        source: join(runDir, "manifest.json")
+      });
+    }
     console.log(`Using existing Glue Up draft for ${runDir}`);
     console.log(`Event ID: ${manifest.glueUp.eventId}`);
     if (manifest.glueUp.eventUrl) console.log(`Event URL: ${manifest.glueUp.eventUrl}`);
@@ -238,13 +253,21 @@ async function ensureDraft(args, options = {}) {
     return;
   }
 
-  let reusable = await findReusableDraftForTemplate({ runDir, selectedGlueUp });
+  let reusable = await findReusableDraftForTemplate({
+    runDir,
+    selectedGlueUp,
+    auth: args.dryRun ? null : await getAuth()
+  });
   if (!reusable) {
     await syncRecentPreparedArtifacts({
       limit: DEFAULT_REUSE_ARTIFACT_LIMIT,
       optional: true
     });
-    reusable = await findReusableDraftForTemplate({ runDir, selectedGlueUp });
+    reusable = await findReusableDraftForTemplate({
+      runDir,
+      selectedGlueUp,
+      auth: args.dryRun ? null : await getAuth()
+    });
   }
   if (reusable) {
     if (args.dryRun) {
@@ -307,8 +330,7 @@ async function ensureDraft(args, options = {}) {
     return;
   }
 
-  const auth = options.auth || (await ensureGlueUpAuth({ headless: !args.headed }));
-  if (!options.auth) printAuthNote(auth);
+  const auth = await getAuth();
 
   const result = await createDraftFromBlueprint({
     templateSelection,
@@ -741,7 +763,7 @@ function printAuthNote(auth) {
   if (authNotes[auth.source]) console.log(authNotes[auth.source]);
 }
 
-async function findReusableDraftForTemplate({ runDir, selectedGlueUp }) {
+async function findReusableDraftForTemplate({ runDir, selectedGlueUp, auth = null }) {
   const entries = await readdir("runs", { withFileTypes: true }).catch(() => []);
   const candidates = [];
   for (const entry of entries) {
@@ -753,6 +775,13 @@ async function findReusableDraftForTemplate({ runDir, selectedGlueUp }) {
     if (!candidate?.manifest?.glueUp?.eventId) continue;
     if (!glueUpTemplateMatches(candidate.glueUp, selectedGlueUp)) continue;
     if (candidate.manifest?.glueUp?.publishedAt || candidate.manifest?.status === "campaigns_scheduled") continue;
+    const draftStatus = auth ? await safeGlueUpConfirmsDraft(candidate.manifest.glueUp.eventId, auth) : true;
+    if (!draftStatus) {
+      console.log(
+        `Skipping ${candidate.runDir}: Glue Up does not confirm event ${candidate.manifest.glueUp.eventId} is still a draft.`
+      );
+      continue;
+    }
     candidates.push(candidate);
   }
 
@@ -791,6 +820,69 @@ function reusableGlueUpSnapshot(glueUp = {}) {
     eventType: glueUp.eventType,
     campaigns: Array.isArray(glueUp.campaigns) ? glueUp.campaigns.map((campaign) => ({ ...campaign })) : []
   };
+}
+
+async function assertRunEventIsDraft({ runDir, args }) {
+  const manifest = await readJson(join(runDir, "manifest.json"));
+  const eventId = manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+  if (args.dryRun) return;
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  printAuthNote(auth);
+  await assertGlueUpEventIsDraft({
+    eventId,
+    cookie: auth.cookie,
+    source: join(runDir, "manifest.json")
+  });
+}
+
+async function assertGlueUpEventIsDraft({ eventId, cookie, source }) {
+  const confirmed = await glueUpConfirmsDraft(eventId, { cookie });
+  if (!confirmed) {
+    throw new Error(
+      `${source} points at Glue Up event ${eventId}, but Glue Up does not confirm that event is still a draft. Refusing to repurpose a possibly published event.`
+    );
+  }
+}
+
+async function glueUpConfirmsDraft(eventId, auth) {
+  if (!eventId || !auth?.cookie) return false;
+  const html = await fetchGlueUpDraftListHtml({ cookie: auth.cookie });
+  return draftListContainsEventId(html, eventId);
+}
+
+async function safeGlueUpConfirmsDraft(eventId, auth) {
+  try {
+    return await glueUpConfirmsDraft(eventId, auth);
+  } catch (error) {
+    console.log(`Could not verify draft status for Glue Up event ${eventId}: ${error.message}`);
+    return false;
+  }
+}
+
+async function fetchGlueUpDraftListHtml({ cookie }) {
+  const response = await fetch(`${GLUEUP_BASE_URL}/events/draft/`, {
+    headers: {
+      cookie,
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    }
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Failed to load Glue Up draft list for draft verification (${response.status}).`);
+  }
+  return text;
+}
+
+function draftListContainsEventId(html, eventId) {
+  const id = String(eventId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [
+    new RegExp(`/events/${id}(?:/|\\b)`),
+    new RegExp(`["']eventId["']\\s*:\\s*["']?${id}["']?`),
+    new RegExp(`["']eventID["']\\s*:\\s*["']?${id}["']?`),
+    new RegExp(`["']id["']\\s*:\\s*["']?${id}["']?`)
+  ].some((pattern) => pattern.test(html));
 }
 
 function assertGlueUpTemplateCompatible({ actual, expected, source }) {

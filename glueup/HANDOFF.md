@@ -173,9 +173,9 @@ Behavior:
 1. Resolves the run directory from the positional event index, latest prepared artifact, or active run marker.
 2. Reads `manifest.json`, `template-selection.json`, and `event.json`.
 3. Uses `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
-4. `ensure` reuses `manifest.glueUp.eventId` when present and template-compatible. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; if none exists locally, it automatically downloads recent successful prepare artifacts before creating a new draft.
+4. `ensure` reuses `manifest.glueUp.eventId` when present, template-compatible, and still confirmed by Glue Up's draft workspace. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; if none exists locally, it automatically downloads recent successful prepare artifacts before creating a new draft. GitHub artifacts only provide candidates; Glue Up must confirm draft status before reuse.
 5. `ensure` reuses existing campaign IDs by key and creates only missing week-before/day-before campaign shells.
-6. `populate` updates the existing draft's basic event settings through the settings page and applies the default recipients/setup/content payloads to existing campaign IDs.
+6. `populate` first confirms the active event is still a Glue Up draft, then updates the existing draft's basic event settings through the settings page and applies the default recipients/setup/content payloads to existing campaign IDs.
 7. The human reviews and publishes manually in Glue Up.
 8. `finalize` posts `schedule-campaign` after publish; use `--dry-run` to write `campaign-schedule-plan.json`.
 
