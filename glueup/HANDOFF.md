@@ -74,7 +74,15 @@ Copied cookies/tokens from browser devtools are examples only. Treat them like p
 
 ## Campaign flow — reverse-engineered via probe (2026-06-15)
 
-`scripts/probe-campaign.mjs` (`npm run probe-campaign`) is a headed Playwright probe that records campaign AJAX **value-free** and **aborts** any action matching `send|schedule|dispatch|deliver|publish|remind` before it reaches Glue Up, so the destructive `schedule-campaign` request can be captured without firing. Reports stream to `.glueup-debug/campaign-probe.json` (gitignored). Probe only against a known test event; never let a real send through.
+`scripts/probe-campaign.mjs` (`npm run probe-campaign`) is a headed Playwright probe that records campaign AJAX **value-free by default** and **aborts** any action matching `send|schedule|dispatch|deliver|publish|remind` before it reaches Glue Up, so the destructive `schedule-campaign` request can be captured without firing. Reports stream to `.glueup-debug/campaign-probe.json` (gitignored). Probe only against a known test event; never let a real send through.
+
+When replayable setup payloads are needed, run the probe with explicit value capture. Token/cookie/password-like fields are still redacted, but recipient/setup/content values are written to the gitignored report:
+
+```bash
+npm run probe-campaign -- --event 185174 --campaign 508089 --capture-values
+```
+
+Then use the browser to save recipients, exclusions, setup, content, and finally click through scheduling. The schedule/send action remains blocked by the default block pattern.
 
 The admin UI's campaign wizard, as captured, is:
 
@@ -92,16 +100,30 @@ The admin UI's campaign wizard, as captured, is:
 
 CREATING an invitation campaign draft works on an UNPUBLISHED event. SCHEDULING/sending is hard-gated: on an unpublished event Glue Up pops "Please publish your event" and blocks the send. So the publish gate sits **between create and schedule**, not before create — which is why `create-draft` stages event + campaign drafts pre-publish, and scheduling must be a separate post-publish step. Also: `EventInvitationCampaign` is only OFFERED as a type on upcoming events (a past event only offers `RegularEventCampaign`).
 
-### Open question for whoever wires Setup/Content + scheduling
+### Confirmed gap: campaign setup payloads
 
-It is UNVERIFIED whether `AddCampaign` alone yields a complete, reviewable invitation campaign (content pre-filled from the event's invitation template) or a bare shell needing steps 2–5. Evidence leans toward content attaching at `AddCampaign`: the step-4/5 *responses* already contained `data.value.blocks` (the template modules), and `AddCampaign` ran before them — suggesting steps 4–5 just re-save existing server-side state. **First action for the next session: run `create-draft` against a fresh draft event and inspect the two campaigns in the Glue Up UI.**
-- If complete → nothing more to do on content; only scheduling remains.
-- If empty shells → steps 2–5 must be replayed. BUT the probe is value-free, so the actual `subject` / email-body `blocks` were NOT captured (only types/lengths). Replaying with partial data would clobber template content. To get real payloads, either (a) re-probe with value capture enabled for these non-secret fields into a gitignored file, or (b) find the GET that returns the campaign's prefilled state after `AddCampaign` and echo it back.
+`AddCampaign` alone creates invitation campaign shells with no recipients. Steps 2–5 must be captured and replayed before scheduling:
+
+- `recipientFiltersStandardFormSubmit`
+- `negativeFiltersStandardFormSubmit`
+- `SetupCampaignFormSubmit`
+- `ContentFormSubmit`
+
+Use `probe-campaign -- --event <eventId> --campaign <campaignId> --capture-values` against one of the existing draft campaigns to capture the real setup payloads into `.glueup-debug/campaign-probe.json`. Do not implement replay from the old value-free report, because it only contains key paths/types and would risk clobbering approved template content.
+
+The captured payload can be replayed against every campaign in a run manifest:
+
+```bash
+npm run apply-campaign-setup -- --event 6 --headed
+```
+
+This rewrites event-specific filter keys to the manifest's Glue Up event ID, rewrites each setup `campaignName` from the manifest campaign title, normalizes the negative filters to exclude all attendees rather than invitees, posts the four setup/content actions, and records `setupAppliedAt` per campaign. It was run successfully for `evt-2026-006`, applying setup to campaigns `508089` and `508090`.
 
 ## Recommended Next Step
 
-1. Validate whether `AddCampaign` alone produces complete campaigns (above).
-2. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
+1. Inspect campaigns `508089` and `508090` in Glue Up to confirm the replayed recipients/setup/content look correct.
+2. If confirmed, fold the captured setup replay into `create-draft` after `AddCampaign`, so future runs do not need the separate `apply-campaign-setup` command.
+3. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
 
 ## Playwright Session Auth
 

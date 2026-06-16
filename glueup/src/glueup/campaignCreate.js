@@ -142,3 +142,135 @@ export async function addCampaign({
 
   return parseAddCampaignResult(payload);
 }
+
+function campaignPath({ eventId, campaignId }) {
+  if (!eventId) throw new Error("Missing Glue Up event ID.");
+  if (!campaignId) throw new Error("Missing Glue Up campaign ID.");
+  return `/events/${eventId}/promote/campaigns/${campaignId}/`;
+}
+
+async function postCampaignAction({
+  eventId,
+  campaignId,
+  action,
+  data,
+  csrfToken = process.env.GLUEUP_CSRF_TOKEN,
+  cookie = process.env.GLUEUP_COOKIE,
+  orgId = process.env.GLUEUP_ORG_ID || DEFAULT_ORG_ID
+}) {
+  if (!cookie) throw new Error("Missing GLUEUP_COOKIE.");
+  if (!action) throw new Error("Missing Glue Up campaign action.");
+  const token = csrfToken || (await fetchCampaignCsrfToken({ cookie }));
+  const currentPath = campaignPath({ eventId, campaignId });
+  const body = new URLSearchParams({
+    action,
+    data: JSON.stringify(data || {}),
+    token,
+    orgID: String(orgId),
+    currentPath
+  });
+
+  const response = await fetch(`${DEFAULT_BASE_URL}${currentPath}ajax`, {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/javascript, */*; q=0.01",
+      "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+      origin: DEFAULT_BASE_URL,
+      referer: `${DEFAULT_BASE_URL}${currentPath}`,
+      "x-requested-with": "XMLHttpRequest",
+      cookie
+    },
+    body: body.toString()
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Glue Up campaign ${action} failed ${response.status}: ${text}`);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Glue Up campaign ${action} returned non-JSON response: ${text}`);
+  }
+  assertNoAppError(payload, action);
+  return payload;
+}
+
+function rewriteEventIdKeys(value, eventId) {
+  if (Array.isArray(value)) return value.map((item) => rewriteEventIdKeys(item, eventId));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, val]) => [
+      key.replace(/eventID=\d+/g, `eventID=${eventId}`),
+      rewriteEventIdKeys(val, eventId)
+    ])
+  );
+}
+
+function setupPayloadForCampaign(action, payload, { eventId, event, campaign }) {
+  const data = rewriteEventIdKeys(structuredClone(payload), eventId);
+  if (action === "negativeFiltersStandardFormSubmit") {
+    for (const key of Object.keys(data)) {
+      if (key.startsWith(`Invitees?eventID=${eventId}`)) data[key] = false;
+      if (key === `Attendees?eventID=${eventId}&status=all`) data[key] = true;
+    }
+  }
+  if (data?.setup) {
+    data.setup.subject = event?.eventName || data.setup.subject;
+    data.setup.campaignName = campaign?.title || data.setup.campaignName;
+  }
+  return data;
+}
+
+export function extractCampaignSetupPayloads(probeReport, { eventId, event, campaign } = {}) {
+  const captured = Array.isArray(probeReport?.captured) ? probeReport.captured : [];
+  const byAction = new Map(captured.map((record) => [record.action, record.dataValue]));
+  const actions = [
+    "recipientFiltersStandardFormSubmit",
+    "negativeFiltersStandardFormSubmit",
+    "SetupCampaignFormSubmit",
+    "ContentFormSubmit"
+  ];
+
+  return actions.map((action) => {
+    const data = byAction.get(action);
+    if (!data) {
+      throw new Error(`Probe report is missing captured data for ${action}. Re-run probe-campaign with --capture-values.`);
+    }
+    return {
+      action,
+      data: setupPayloadForCampaign(action, data, { eventId, event, campaign })
+    };
+  });
+}
+
+export async function applyCampaignSetup({
+  eventId,
+  campaignId,
+  payloads,
+  csrfToken = process.env.GLUEUP_CSRF_TOKEN,
+  cookie = process.env.GLUEUP_COOKIE,
+  orgId = process.env.GLUEUP_ORG_ID || DEFAULT_ORG_ID
+}) {
+  if (!Array.isArray(payloads) || !payloads.length) {
+    throw new Error("Missing campaign setup payloads.");
+  }
+  const token = csrfToken || (await fetchCampaignCsrfToken({ cookie }));
+  const responses = [];
+  for (const payload of payloads) {
+    responses.push(
+      await postCampaignAction({
+        eventId,
+        campaignId,
+        action: payload.action,
+        data: payload.data,
+        csrfToken: token,
+        cookie,
+        orgId
+      })
+    );
+  }
+  return responses;
+}
