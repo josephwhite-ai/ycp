@@ -45,6 +45,8 @@ Each run targets one event, identified by its index — a counter unique across 
 
 Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step must run locally because Glue Up's login is behind Cloudflare. `create-draft` bridges both halves in one command: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and runs the create flow.
 
+`create-draft` stages everything that can be done **before publishing**: it creates the event draft and then two invitation campaign drafts (one to send a week before, one a day before), recording their IDs in `manifest.json` under `glueUp.campaigns`. You then review the event and both campaigns together and publish the event in Glue Up — a deliberate manual step, since publishing is effectively irreversible. Scheduling the campaigns is gated on publish and runs as a separate post-publish step (not yet wired into the CLI).
+
 With no arguments, `create-draft` pulls the **latest successful prepare run** from CI and infers which event it is from the artifact name — so the event index is named once, on GitHub, and never repeated locally:
 
 ```bash

@@ -17,7 +17,16 @@ import { generateArtifacts } from "./generate/contentGenerator.js";
 import { validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
+import { addCampaign } from "./glueup/campaignCreate.js";
 import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
+
+// Two invitation campaigns per event — one to send a week before, one a day
+// before. They're created as drafts now (pre-publish) so they can be reviewed
+// alongside the event; scheduling happens in a later post-publish step.
+const CAMPAIGN_PLAN = [
+  { key: "week-before", label: "1 week before" },
+  { key: "day-before", label: "1 day before" }
+];
 
 loadDotEnv();
 
@@ -205,13 +214,21 @@ async function createDraft(args) {
   });
   const createdAt = new Date().toISOString();
 
+  const campaigns = await createInvitationCampaigns({
+    eventId: result.eventId,
+    event,
+    cookie: auth.cookie,
+    orgId: auth.orgId
+  });
+
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
     eventId: result.eventId,
     eventUrl: result.eventUrl,
     draftCreatedAt: createdAt,
     blueprintCode: selected.glueUp.blueprintCode,
-    eventType: selected.glueUp.eventType
+    eventType: selected.glueUp.eventType,
+    campaigns
   };
   manifest.status = "draft_created";
 
@@ -223,6 +240,36 @@ async function createDraft(args) {
   console.log(`Created Glue Up draft for ${runDir}`);
   if (result.eventId) console.log(`Event ID: ${result.eventId}`);
   if (result.eventUrl) console.log(`Event URL: ${result.eventUrl}`);
+  for (const campaign of campaigns) {
+    if (campaign.campaignId) {
+      console.log(`Campaign (${campaign.label}): ${campaign.campaignUrl}`);
+    } else {
+      console.log(`Campaign (${campaign.label}) FAILED: ${campaign.error}`);
+    }
+  }
+  console.log(`\nReview the event and campaigns, then publish the event in Glue Up to enable scheduling.`);
+}
+
+// Create the invitation campaign drafts on the freshly-created event. Each is
+// independent: one failing must not lose the event or the other campaign, so
+// failures are captured per-campaign rather than thrown.
+async function createInvitationCampaigns({ eventId, event, cookie, orgId }) {
+  if (!eventId) {
+    throw new Error("Cannot create campaigns without a Glue Up event ID.");
+  }
+  const baseTitle = event?.eventName || event?.sourceDocumentTitle || "Event";
+
+  const results = [];
+  for (const { key, label } of CAMPAIGN_PLAN) {
+    const title = `${baseTitle} — Invitation (${label})`;
+    try {
+      const created = await addCampaign({ eventId, title, cookie, orgId });
+      results.push({ key, label, title, campaignId: created.campaignId, campaignUrl: created.campaignUrl });
+    } catch (error) {
+      results.push({ key, label, title, campaignId: null, error: error?.message || String(error) });
+    }
+  }
+  return results;
 }
 
 async function glueupLogin(args) {
