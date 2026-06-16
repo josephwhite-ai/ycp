@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -14,14 +14,15 @@ import {
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
-import { validateEventRun, validationReport } from "./validate/validators.js";
+import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
-import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
+import { buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
 import {
   addCampaign,
   applyCampaignSetup,
   buildDefaultCampaignSetupPayloads,
-  extractCampaignSetupPayloads
+  extractCampaignSetupPayloads,
+  scheduleCampaign
 } from "./glueup/campaignCreate.js";
 import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
 
@@ -37,6 +38,7 @@ loadDotEnv();
 
 const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
 const ARTIFACT_PREFIX = "glueup-run-";
+const DEFAULT_REUSE_ARTIFACT_LIMIT = 20;
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -47,7 +49,19 @@ try {
   } else if (command === "validate") {
     await validate(args);
   } else if (command === "create-draft") {
-    await createDraft(args);
+    await createDraftWorkflow(args);
+  } else if (command === "ensure-draft") {
+    await ensureDraft(args);
+  } else if (command === "ensure-campaigns") {
+    await ensureCampaigns(args);
+  } else if (command === "populate-draft") {
+    await populateDraft(args);
+  } else if (command === "populate-campaigns") {
+    await populateCampaigns(args);
+  } else if (command === "publish-draft") {
+    await publishDraft(args);
+  } else if (command === "schedule-campaigns") {
+    await scheduleCampaigns(args);
   } else if (command === "apply-campaign-setup") {
     await applyCapturedCampaignSetup(args);
   } else if (command === "mark-ignore") {
@@ -164,7 +178,19 @@ async function validate(args) {
   if (!validation.ok) process.exitCode = 1;
 }
 
-async function createDraft(args) {
+async function createDraftWorkflow(args) {
+  const ensured = await ensureDraft(args, { returnManifest: true });
+  if (args.dryRun) return;
+  const { runDir } = ensured;
+  await ensureCampaigns({ ...args, run: runDir });
+  await populateCampaigns({ ...args, run: runDir });
+  const updated = await readJson(join(runDir, "manifest.json"));
+  console.log(`\nPre-publish Glue Up objects are ready for ${runDir}.`);
+  if (updated?.glueUp?.eventUrl) console.log(`Event URL: ${updated.glueUp.eventUrl}`);
+  console.log(`Review the event and campaigns, then publish the event in Glue Up to enable scheduling.`);
+}
+
+async function ensureDraft(args, options = {}) {
   const runDir = await prepareRunForDraft(args);
 
   const [manifest, templateSelection, rawEvent] = await Promise.all([
@@ -182,6 +208,62 @@ async function createDraft(args) {
   const selected = templateSelection?.selected;
   if (!selected?.glueUp?.eventType || !selected?.glueUp?.blueprintCode) {
     throw new Error("template-selection.json is missing a selected Glue Up blueprint.");
+  }
+  const selectedGlueUp = selected.glueUp;
+
+  if (manifest?.glueUp?.eventId) {
+    assertGlueUpTemplateCompatible({
+      actual: manifest.glueUp,
+      expected: selectedGlueUp,
+      source: join(runDir, "manifest.json"),
+      allowMismatch: args.allowTemplateMismatch
+    });
+    console.log(`Using existing Glue Up draft for ${runDir}`);
+    console.log(`Event ID: ${manifest.glueUp.eventId}`);
+    if (manifest.glueUp.eventUrl) console.log(`Event URL: ${manifest.glueUp.eventUrl}`);
+    if (options.returnManifest) return { runDir, manifest };
+    return;
+  }
+
+  if (args.pollArtifacts) {
+    await syncRecentPreparedArtifacts({ limit: Number(args.reuseArtifactLimit || DEFAULT_REUSE_ARTIFACT_LIMIT) });
+  }
+
+  if (!args.noReuse) {
+    const reusable = await findReusableDraftForTemplate({ runDir, selectedGlueUp });
+    if (reusable) {
+      if (args.dryRun) {
+        await writeJson(join(runDir, "draft-reuse-plan.json"), {
+          runDir,
+          reusableRunDir: reusable.runDir,
+          eventId: reusable.manifest.glueUp.eventId,
+          eventUrl: reusable.manifest.glueUp.eventUrl,
+          blueprintCode: selectedGlueUp.blueprintCode,
+          eventType: selectedGlueUp.eventType,
+          sourceStatus: reusable.manifest.status || null
+        });
+        console.log(`Wrote draft reuse plan to ${join(runDir, "draft-reuse-plan.json")}`);
+        if (options.returnManifest) return { runDir, manifest };
+        return;
+      }
+      manifest.glueUp = {
+        ...(manifest.glueUp || {}),
+        ...reusableGlueUpSnapshot(reusable.manifest.glueUp),
+        reusedFrom: {
+          runDir: reusable.runDir,
+          event: reusable.manifest.event || null,
+          status: reusable.manifest.status || null,
+          reusedAt: new Date().toISOString()
+        }
+      };
+      manifest.status = "draft_reused";
+      await writeJson(join(runDir, "manifest.json"), manifest);
+      console.log(`Reusing Glue Up draft from ${reusable.runDir} (${selectedGlueUp.blueprintCode})`);
+      console.log(`Event ID: ${manifest.glueUp.eventId}`);
+      if (manifest.glueUp.eventUrl) console.log(`Event URL: ${manifest.glueUp.eventUrl}`);
+      if (options.returnManifest) return { runDir, manifest };
+      return;
+    }
   }
 
   if (args.dryRun) {
@@ -207,6 +289,7 @@ async function createDraft(args) {
     };
     await writeJson(join(runDir, "draft-create-plan.json"), plan);
     console.log(`Wrote draft create plan to ${join(runDir, "draft-create-plan.json")}`);
+    if (options.returnManifest) return { runDir, manifest };
     return;
   }
 
@@ -228,24 +311,15 @@ async function createDraft(args) {
   });
   const createdAt = new Date().toISOString();
 
-  const campaigns = await createInvitationCampaigns({
-    eventId: result.eventId,
-    event,
-    cookie: auth.cookie,
-    orgId: auth.orgId
-  });
-
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
     eventId: result.eventId,
     eventUrl: result.eventUrl,
     draftCreatedAt: createdAt,
     blueprintCode: selected.glueUp.blueprintCode,
-    eventType: selected.glueUp.eventType,
-    campaigns
+    eventType: selected.glueUp.eventType
   };
-  manifest.status =
-    campaigns.length > 0 && campaigns.every((campaign) => campaign.setupAppliedAt) ? "campaigns_setup" : "draft_created";
+  manifest.status = "draft_ensured";
 
   await Promise.all([
     writeJson(join(runDir, "manifest.json"), manifest),
@@ -255,51 +329,198 @@ async function createDraft(args) {
   console.log(`Created Glue Up draft for ${runDir}`);
   if (result.eventId) console.log(`Event ID: ${result.eventId}`);
   if (result.eventUrl) console.log(`Event URL: ${result.eventUrl}`);
-  for (const campaign of campaigns) {
-    if (campaign.campaignId) {
-      console.log(`Campaign (${campaign.label}): ${campaign.campaignUrl}`);
-      if (campaign.setupAppliedAt) console.log(`  Setup applied at ${campaign.setupAppliedAt}`);
-      if (campaign.setupError) console.log(`  Setup FAILED: ${campaign.setupError}`);
-    } else {
-      console.log(`Campaign (${campaign.label}) FAILED: ${campaign.error}`);
-    }
-  }
-  console.log(`\nReview the event and campaigns, then publish the event in Glue Up to enable scheduling.`);
+  if (options.returnManifest) return { runDir, manifest };
 }
 
 // Create the invitation campaign drafts on the freshly-created event. Each is
 // independent: one failing must not lose the event or the other campaign, so
 // failures are captured per-campaign rather than thrown.
-async function createInvitationCampaigns({ eventId, event, cookie, orgId }) {
+async function createInvitationCampaigns({ eventId, event, cookie, orgId, plan = CAMPAIGN_PLAN }) {
   if (!eventId) {
     throw new Error("Cannot create campaigns without a Glue Up event ID.");
   }
-  const baseTitle = event?.eventName || event?.sourceDocumentTitle || "Event";
-
   const results = [];
-  for (const { key, label } of CAMPAIGN_PLAN) {
-    const title = `${baseTitle} — Invitation (${label})`;
+  for (const item of plan) {
+    const { key, label } = item;
+    const title = campaignTitleForPlan(event, item);
     try {
       const created = await addCampaign({ eventId, title, cookie, orgId });
-      const campaign = { key, label, title, campaignId: created.campaignId, campaignUrl: created.campaignUrl };
-      try {
-        await applyCampaignSetup({
-          eventId,
-          campaignId: created.campaignId,
-          payloads: buildDefaultCampaignSetupPayloads({ eventId, event, campaign }),
-          cookie,
-          orgId
-        });
-        campaign.setupAppliedAt = new Date().toISOString();
-      } catch (setupError) {
-        campaign.setupError = setupError?.message || String(setupError);
-      }
-      results.push(campaign);
+      results.push({ key, label, title, campaignId: created.campaignId, campaignUrl: created.campaignUrl });
     } catch (error) {
       results.push({ key, label, title, campaignId: null, error: error?.message || String(error) });
     }
   }
   return results;
+}
+
+async function ensureCampaigns(args) {
+  const runDir = resolveRunDir(args);
+  const [manifest, rawEvent] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
+  const eventId = manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure-draft first.`);
+
+  const existingCampaigns = Array.isArray(manifest?.glueUp?.campaigns) ? manifest.glueUp.campaigns : [];
+  const existingByKey = new Map(
+    existingCampaigns.filter((campaign) => campaign.campaignId).map((campaign) => [campaign.key, campaign])
+  );
+  const missing = CAMPAIGN_PLAN.filter((campaign) => !existingByKey.has(campaign.key));
+  if (!missing.length) {
+    console.log(`Using existing Glue Up campaign drafts for ${runDir}`);
+    return;
+  }
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  printAuthNote(auth);
+  const event = normalizeEventFields(rawEvent);
+  const created = await createInvitationCampaigns({
+    eventId,
+    event,
+    cookie: auth.cookie,
+    orgId: auth.orgId,
+    plan: missing
+  });
+  const merged = mergeCampaigns(existingCampaigns, created);
+  manifest.status = "campaigns_ensured";
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    campaigns: merged
+  };
+  await writeJson(join(runDir, "manifest.json"), manifest);
+  for (const campaign of created) {
+    if (campaign.campaignId) console.log(`Created campaign (${campaign.label}): ${campaign.campaignUrl}`);
+    else console.log(`Campaign (${campaign.label}) FAILED: ${campaign.error}`);
+  }
+}
+
+async function populateDraft(args) {
+  const runDir = resolveRunDir(args);
+  const [manifest, rawEvent] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
+  const eventId = manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure-draft first.`);
+
+  const event = normalizeEventFields(rawEvent);
+  await populateEventSettingsViaSettingsPage({
+    eventId,
+    event,
+    timezone: getConfig({ timezone: args.timezone }).timezone,
+    headless: !args.headed
+  });
+  manifest.status = "draft_populated";
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    draftPopulatedAt: new Date().toISOString()
+  };
+  await writeJson(join(runDir, "manifest.json"), manifest);
+  console.log(`Populated Glue Up draft ${eventId} from ${runDir}`);
+}
+
+async function populateCampaigns(args) {
+  const runDir = resolveRunDir(args);
+  const [manifest, event] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
+  const eventId = manifest?.glueUp?.eventId;
+  const campaigns = manifest?.glueUp?.campaigns || [];
+  const targetCampaigns = campaigns.filter((campaign) => campaign.campaignId);
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure-draft first.`);
+  if (!targetCampaigns.length) throw new Error(`${join(runDir, "manifest.json")} has no campaign IDs. Run ensure-campaigns first.`);
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  printAuthNote(auth);
+  const normalizedEvent = normalizeEventFields(event);
+  for (const campaign of targetCampaigns) {
+    const planned = CAMPAIGN_PLAN.find((item) => item.key === campaign.key);
+    if (planned) {
+      campaign.label = planned.label;
+      campaign.title = campaignTitleForPlan(normalizedEvent, planned);
+    }
+    await applyCampaignSetup({
+      eventId,
+      campaignId: campaign.campaignId,
+      payloads: buildDefaultCampaignSetupPayloads({ eventId, event: normalizedEvent, campaign }),
+      cookie: auth.cookie,
+      orgId: auth.orgId
+    });
+    campaign.setupAppliedAt = new Date().toISOString();
+    console.log(`Populated campaign: ${campaign.label} (${campaign.campaignId})`);
+  }
+
+  manifest.status = "campaigns_populated";
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    campaigns: targetCampaigns.length === campaigns.length ? targetCampaigns : campaigns
+  };
+  await writeJson(join(runDir, "manifest.json"), manifest);
+}
+
+async function publishDraft() {
+  throw new Error(
+    "publish-draft is intentionally not wired yet: the Glue Up publish request has not been captured and publishing is irreversible. Publish manually in Glue Up for now, then run schedule-campaigns."
+  );
+}
+
+async function scheduleCampaigns(args) {
+  const runDir = resolveRunDir(args);
+  const [manifest, event] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
+  const eventId = manifest?.glueUp?.eventId;
+  const allCampaigns = manifest?.glueUp?.campaigns || [];
+  const campaigns = allCampaigns.filter((campaign) => campaign.campaignId);
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId.`);
+  if (!campaigns.length) throw new Error(`${join(runDir, "manifest.json")} has no campaign IDs to schedule.`);
+  if (!args.confirm && !args.dryRun) {
+    throw new Error("Scheduling can send real campaign emails. Re-run with --confirm after the event is published.");
+  }
+
+  const config = getConfig({ timezone: args.timezone });
+  const schedule = buildCampaignSchedule(event.eventDate, config.timezone);
+  if (!schedule) throw new Error(`Could not calculate campaign schedule from eventDate "${event.eventDate}".`);
+
+  const scheduled = [];
+  for (const campaign of campaigns) {
+    const send = schedule[camelCampaignKey(campaign.key)];
+    if (!send) throw new Error(`No schedule mapping exists for campaign key "${campaign.key}".`);
+    const sendDate = send.label.slice(0, 10);
+    scheduled.push({ campaign, sendDate, sendTime: "04:00" });
+  }
+
+  if (args.dryRun) {
+    await writeJson(
+      join(runDir, "campaign-schedule-plan.json"),
+      scheduled.map(({ campaign, sendDate, sendTime }) => ({
+        key: campaign.key,
+        campaignId: campaign.campaignId,
+        sendDate,
+        sendTime,
+        timezone: config.timezone
+      }))
+    );
+    console.log(`Wrote campaign schedule plan to ${join(runDir, "campaign-schedule-plan.json")}`);
+    return;
+  }
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  printAuthNote(auth);
+  for (const item of scheduled) {
+    await scheduleCampaign({
+      eventId,
+      campaignId: item.campaign.campaignId,
+      sendDate: item.sendDate,
+      sendTime: item.sendTime,
+      timezone: config.timezone,
+      cookie: auth.cookie,
+      orgId: auth.orgId
+    });
+    item.campaign.scheduledAt = new Date().toISOString();
+    item.campaign.sendDate = item.sendDate;
+    item.campaign.sendTime = item.sendTime;
+    item.campaign.timezone = config.timezone;
+    console.log(`Scheduled campaign: ${item.campaign.label} (${item.campaign.campaignId}) for ${item.sendDate} ${item.sendTime}`);
+  }
+
+  manifest.status = "campaigns_scheduled";
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    campaigns: campaigns.length === allCampaigns.length ? campaigns : allCampaigns
+  };
+  await writeJson(join(runDir, "manifest.json"), manifest);
 }
 
 async function applyCapturedCampaignSetup(args) {
@@ -434,6 +655,196 @@ async function markEventIgnoreViaSettingsPage({ eventId, title, headless }) {
     }
   } finally {
     await context.close().catch(() => {});
+  }
+}
+
+async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, headless }) {
+  const { chromium } = await import("playwright");
+  const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless,
+    viewport: { width: 1440, height: 1000 }
+  });
+  const page = context.pages()[0] || (await context.newPage());
+  const title = event?.eventName || event?.sourceDocumentTitle || "Untitled event";
+  const times = parseEventTimes(event);
+  try {
+    await page.goto(`https://ycp.glueup.com/events/${eventId}/setup/settings/general/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.locator('input[name="title"]').first().waitFor({ state: "visible", timeout: 60_000 });
+    await fillFirstVisible(page, ['input[name="title"]'], title);
+    await fillFirstVisible(page, ['input[name="startDate"]', 'input[name="start_date"]'], times.startDate);
+    await fillFirstVisible(page, ['input[name="endDate"]', 'input[name="end_date"]'], times.endDate);
+    await fillFirstVisible(page, ['input[name="startTime"]', 'input[name="start_time"]'], times.startTime);
+    await fillFirstVisible(page, ['input[name="endTime"]', 'input[name="end_time"]'], times.endTime);
+    await fillFirstVisible(page, ['input[name="venue.timezone"]', 'input[name="timezone"]'], timezone);
+
+    const responsePromise = page
+      .waitForResponse((response) =>
+        response.url().includes(`/events/${eventId}/setup/settings/general/ajax`) &&
+        response.request().method() === "POST"
+      )
+      .catch(() => null);
+    await page.locator('button.save-button, [data-event="StandardForm::submit"]').first().click();
+    const response = await responsePromise;
+    if (response && !response.ok()) {
+      throw new Error(`Glue Up settings save failed ${response.status()}.`);
+    }
+    await page.waitForTimeout(1_000);
+    const currentTitle = await page.locator('input[name="title"]').first().inputValue();
+    if (currentTitle !== title) {
+      throw new Error(`Glue Up settings save did not persist the event title; current title is "${currentTitle}".`);
+    }
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+async function fillFirstVisible(page, selectors, value) {
+  if (!value) return false;
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    if ((await locator.count()) > 0 && (await locator.isVisible().catch(() => false))) {
+      await locator.fill(String(value));
+      return true;
+    }
+  }
+  return false;
+}
+
+function mergeCampaigns(existing, created) {
+  const byKey = new Map(existing.map((campaign) => [campaign.key, campaign]));
+  for (const campaign of created) {
+    byKey.set(campaign.key, { ...(byKey.get(campaign.key) || {}), ...campaign });
+  }
+  return CAMPAIGN_PLAN.map(({ key }) => byKey.get(key)).filter(Boolean);
+}
+
+function campaignTitleForPlan(event, { label }) {
+  const baseTitle = event?.eventName || event?.sourceDocumentTitle || "Event";
+  return `${baseTitle} — Invitation (${label})`;
+}
+
+function camelCampaignKey(key) {
+  if (key === "week-before") return "weekBefore";
+  if (key === "day-before") return "dayBefore";
+  return key;
+}
+
+function printAuthNote(auth) {
+  const authNotes = {
+    env: "Using GLUEUP_COOKIE/CSRF from the environment.",
+    session: "Using saved Glue Up session.",
+    login: "Logged in to Glue Up."
+  };
+  if (authNotes[auth.source]) console.log(authNotes[auth.source]);
+}
+
+async function findReusableDraftForTemplate({ runDir, selectedGlueUp }) {
+  const entries = await readdir("runs", { withFileTypes: true }).catch(() => []);
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidateRunDir = join("runs", entry.name);
+    if (resolve(candidateRunDir) === resolve(runDir)) continue;
+
+    const candidate = await readReusableCandidate(candidateRunDir).catch(() => null);
+    if (!candidate?.manifest?.glueUp?.eventId) continue;
+    if (!glueUpTemplateMatches(candidate.glueUp, selectedGlueUp)) continue;
+    if (candidate.manifest?.glueUp?.publishedAt || candidate.manifest?.status === "campaigns_scheduled") continue;
+    candidates.push(candidate);
+  }
+
+  candidates.sort((a, b) => reusableDraftScore(b) - reusableDraftScore(a));
+  return candidates[0] || null;
+}
+
+async function readReusableCandidate(runDir) {
+  const manifest = await readJson(join(runDir, "manifest.json"));
+  const templateSelection = await readJson(join(runDir, "template-selection.json")).catch(() => null);
+  const selectedGlueUp = templateSelection?.selected?.glueUp || {};
+  return {
+    runDir,
+    manifest,
+    glueUp: {
+      eventType: manifest?.glueUp?.eventType || selectedGlueUp.eventType || null,
+      blueprintCode: manifest?.glueUp?.blueprintCode || selectedGlueUp.blueprintCode || null
+    }
+  };
+}
+
+function reusableDraftScore(candidate) {
+  const glueUp = candidate.manifest?.glueUp || {};
+  const status = candidate.manifest?.status;
+  const ignoredBoost = status === "ignored" || glueUp.ignoredAt ? 10_000_000_000_000 : 0;
+  const createdAt = Date.parse(glueUp.draftCreatedAt || candidate.manifest?.preparedAt || "") || 0;
+  return ignoredBoost + createdAt;
+}
+
+function reusableGlueUpSnapshot(glueUp = {}) {
+  return {
+    eventId: glueUp.eventId,
+    eventUrl: glueUp.eventUrl,
+    draftCreatedAt: glueUp.draftCreatedAt,
+    blueprintCode: glueUp.blueprintCode,
+    eventType: glueUp.eventType,
+    campaigns: Array.isArray(glueUp.campaigns) ? glueUp.campaigns.map((campaign) => ({ ...campaign })) : []
+  };
+}
+
+function assertGlueUpTemplateCompatible({ actual, expected, source, allowMismatch = false }) {
+  if (allowMismatch) return;
+  if (!actual?.blueprintCode) {
+    console.log(`Warning: ${source} has a Glue Up event ID but no blueprintCode; template compatibility cannot be verified.`);
+    return;
+  }
+  if (!glueUpTemplateMatches(actual, expected)) {
+    throw new Error(
+      `${source} already points at Glue Up event ${actual.eventId}, but its template is ${actual.blueprintCode}/${actual.eventType || "unknown"} and this run selected ${expected.blueprintCode}/${expected.eventType}. Pass --allow-template-mismatch only if you intentionally want to reuse it.`
+    );
+  }
+}
+
+function glueUpTemplateMatches(actual, expected) {
+  if (!actual?.blueprintCode || !expected?.blueprintCode) return false;
+  if (String(actual.blueprintCode) !== String(expected.blueprintCode)) return false;
+  if (actual.eventType && expected.eventType && String(actual.eventType) !== String(expected.eventType)) return false;
+  return true;
+}
+
+async function syncRecentPreparedArtifacts({ limit }) {
+  const runs = JSON.parse(
+    ghCapture([
+      "run",
+      "list",
+      "--workflow",
+      PREPARE_WORKFLOW,
+      "--status",
+      "success",
+      "--limit",
+      String(limit),
+      "--json",
+      "databaseId"
+    ])
+  );
+
+  for (const run of runs) {
+    const artifacts = JSON.parse(
+      ghCapture([
+        "api",
+        `repos/{owner}/{repo}/actions/runs/${run.databaseId}/artifacts`,
+        "--jq",
+        ".artifacts"
+      ])
+    );
+    for (const artifact of artifacts.filter((item) => item.name.startsWith(ARTIFACT_PREFIX))) {
+      const slug = artifact.name.slice(ARTIFACT_PREFIX.length);
+      if (existsSync(join("runs", slug, "manifest.json"))) continue;
+      console.log(`Downloading reusable draft artifact ${artifact.name} from run #${run.databaseId} ...`);
+      gh(["run", "download", String(run.databaseId), "-n", artifact.name, "-D", "runs"]);
+    }
   }
 }
 
@@ -628,17 +1039,23 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
-  npm run create-draft -- 6                  # dispatch a fresh prepare run, then create the draft
-  npm run create-draft                      # pull the latest prepared event from CI + create the draft
-  npm run create-draft -- --event 6         # target a specific older event
-  npm run create-draft -- --event 6 --fresh # explicit long form of the normal path
-  npm run apply-campaign-setup -- --event 6 # replay captured recipient/setup/content payloads
-  npm run mark-ignore -- --event 6 --headed # rename a junk draft/campaigns to PLEASE IGNORE
+  npm run ensure-draft -- 6                  # create a Glue Up draft only if this run has no event ID
+  npm run ensure-campaigns -- --event 6      # create missing campaign shells only
+  npm run populate-draft -- --event 6        # update an existing draft's basic event settings
+  npm run populate-campaigns -- --event 6    # apply recipients/setup/content to existing campaigns
+  npm run publish-draft -- --event 6         # placeholder until the publish request is captured
+  npm run schedule-campaigns -- --event 6 --confirm
+
+Compatibility:
+  npm run create-draft -- 6                  # ensure draft + ensure campaigns + populate campaigns
+  npm run create-draft                       # pull latest prepared event from CI, then run compatibility flow
+  npm run apply-campaign-setup -- --event 6  # replay captured recipient/setup/content payloads
+  npm run mark-ignore -- --event 6 --headed  # rename a junk draft/campaigns to PLEASE IGNORE
 
 Support/debug commands:
-  npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only; create-draft is the normal entrypoint
+  npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only
   npm run glueup-login                      # refresh the saved browser session only
-  npm run monthly-prepare -- --event 6      # CI prepare backend; usually dispatched by create-draft --fresh
+  npm run monthly-prepare -- --event 6      # CI prepare backend; usually dispatched by ensure-draft --fresh
   npm run validate -- --run runs/evt-2026-006
 
 Options:
@@ -649,8 +1066,13 @@ Options:
   --timezone America/New_York
   --dry-run
   --fresh            Dispatch the prepare workflow and wait for it before downloading
-  --headed           (Unused now; login always opens a visible browser when needed)
+  --headed           Open a visible browser for Glue Up session/page mutations
   --probe path        Defaults to .glueup-debug/campaign-probe.json for apply-campaign-setup
   --title text        Defaults to PLEASE IGNORE for mark-ignore
+  --confirm           Required for schedule-campaigns unless --dry-run is set
+  --poll-artifacts    Download recent prepare artifacts before looking for a reusable draft
+  --reuse-artifact-limit N
+  --no-reuse          Force ensure-draft to create a new draft when manifest has no event ID
+  --allow-template-mismatch
 `);
 }

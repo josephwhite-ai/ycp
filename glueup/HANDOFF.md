@@ -153,30 +153,32 @@ Behavior:
 
 Auth resolution order for `create-draft` (`ensureGlueUpAuth`): `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment → a still-valid saved `.glueup-session/` (probed headlessly, non-interactive, fails fast) → a headed login that opens a visible browser only when the saved session is missing or expired. The happy path never prompts.
 
-## `create-draft` Command
+## Ensure / populate commands
 
-`create-draft` is effectively one command. It bridges the CI prepare half and the local draft half: pulls the prepared artifact, ensures a Glue Up session, and runs the 3-step create flow.
+The Glue Up workflow is split so existing drafts can be reused instead of renamed `PLEASE IGNORE`. Ensure commands create missing shells; populate commands update already-known Glue Up objects.
 
 ```bash
-npm run create-draft                      # pull the LATEST successful prepare run from CI, infer the event, create the draft
-npm run create-draft -- 6                  # normal path: fresh prepare + create draft
-npm run create-draft -- --event 6         # target a specific older event (syncs only if not already on disk)
-npm run create-draft -- --event 6 --fresh # dispatch a new prepare run, wait for it, then create the draft
+npm run ensure-draft -- 6                  # fresh prepare + create a Glue Up draft only if needed
+npm run ensure-campaigns -- --event 6      # create missing campaign shells only
+npm run populate-draft -- --event 6        # update an existing draft's basic event settings
+npm run populate-campaigns -- --event 6    # apply recipients/setup/content to existing campaigns
+npm run schedule-campaigns -- --event 6 --confirm # post-publish scheduling
 ```
 
-The event index is named once, positionally, for the normal fresh path. With no args, `create-draft` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. Use `--event` only when intentionally targeting an older prepared run.
+`create-draft` remains as a compatibility wrapper for `ensure-draft`, `ensure-campaigns`, and `populate-campaigns`. With no args, `ensure-draft` or `create-draft` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. Use `--event` only when intentionally targeting an older prepared run.
 
 Behavior:
 
 1. Resolves the run directory (pull-latest / `--event` / `--fresh` / `--run`).
 2. Reads `manifest.json`, `template-selection.json`, and `event.json`.
 3. Uses `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
-4. Runs AddEvent → blueprintSubmit → EventSessionSubmit, populating title, start/end date+time, and venue from `event.json`.
-5. Creates two invitation campaign drafts (week-before, day-before) on the new event via `addCampaign`; failures are captured per-campaign so they don't lose the event.
-6. Persists the event ID/URL and `glueUp.campaigns` (each `{ key, label, title, campaignId, campaignUrl }`) into `manifest.json`, and writes the raw event response to `draft-create-response.json`.
-7. Does NOT schedule the campaigns — that is the post-publish step (see "Campaign flow" above).
+4. `ensure-draft` reuses `manifest.glueUp.eventId` when present and template-compatible. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; pass `--poll-artifacts` to download recent successful prepare artifacts before scanning.
+5. `ensure-campaigns` reuses existing campaign IDs by key and creates only missing week-before/day-before campaign shells.
+6. `populate-draft` updates the existing draft's basic event settings through the settings page.
+7. `populate-campaigns` applies the default recipients/setup/content payloads to existing campaign IDs.
+8. `schedule-campaigns` posts `schedule-campaign` after publish and requires `--confirm`; use `--dry-run` to write `campaign-schedule-plan.json`.
 
-`create-draft` requires the `gh` CLI (authenticated) to pull artifacts.
+`ensure-draft` requires the `gh` CLI (authenticated) to pull artifacts.
 
 Standalone steps if you want to pre-stage or refresh auth separately:
 
@@ -185,7 +187,7 @@ npm run sync-run -- --event 6 [--fresh]   # download an artifact only
 npm run glueup-login                      # refresh the saved browser session only
 ```
 
-Treat these as debug/support commands. The preferred operator path remains `create-draft`.
+Treat these as debug/support commands. The preferred operator path is now the explicit ensure/populate sequence; `create-draft` is only a compatibility wrapper.
 
 Dry run (no Glue Up auth required):
 

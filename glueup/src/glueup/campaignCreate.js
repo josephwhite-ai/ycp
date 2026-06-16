@@ -371,3 +371,32 @@ export async function applyCampaignSetup({
   }
   return responses;
 }
+
+export async function scheduleCampaign({
+  eventId,
+  campaignId,
+  sendDate,
+  sendTime = "04:00",
+  timezone = "America/New_York",
+  isNotificationEnabled = false,
+  csrfToken = process.env.GLUEUP_CSRF_TOKEN,
+  cookie = process.env.GLUEUP_COOKIE,
+  orgId = process.env.GLUEUP_ORG_ID || DEFAULT_ORG_ID
+}) {
+  if (!sendDate) throw new Error("Missing campaign send date.");
+  return postCampaignAction({
+    eventId,
+    campaignId,
+    action: "schedule-campaign",
+    data: {
+      id: null,
+      isNotificationEnabled,
+      timezone: { code: timezone },
+      sendTime,
+      sendDate
+    },
+    csrfToken,
+    cookie,
+    orgId
+  });
+}
