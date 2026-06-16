@@ -2,13 +2,16 @@
 
 ## Current Status
 
-One operator entrypoint is working end-to-end for the pre-publish stage:
+The operator workflow is local and intentionally three-step:
 
 ```bash
-npm run create-draft -- 6
+npm run ensure -- 6
+npm run populate -- --event 6
+# human reviews and manually publishes in Glue Up
+npm run finalize -- --event 6 --confirm
 ```
 
-That local command treats GitHub Actions as the prepare backend, then uses the local saved Glue Up browser session for mutations. Avoid introducing a second normal operator path where users prepare in GitHub and then remember separate local follow-up commands; `create-draft` should stay the public interface.
+`ensure` treats GitHub Actions as the prepare backend, then uses the local saved Glue Up browser session to ensure the draft and campaign shells exist. `populate` updates those existing Glue Up objects. The script never publishes an event; publish remains a manual irreversible review step. `finalize` schedules campaign emails after publish.
 
 Under the hood, two halves are working:
 
@@ -24,7 +27,7 @@ Under the hood, two halves are working:
 - Generates event-template field briefs and campaign-template fill briefs.
 - Uploads `glueup/runs/<slug>/` as the artifact `glueup-run-evt-<year>-<NNN>`.
 
-**Draft creation (local).** `create-draft` runs the full 3-step Glue Up internal AJAX flow (AddEvent → blueprintSubmit → EventSessionSubmit) and produces a real event with an ID. Verified live: it created event `185166` with title, start/end date+time, and venue populated from `event.json`; a later run created event `185174` plus campaign drafts `508089` and `508090`. The draft step must run locally because Glue Up's login is behind Cloudflare (headless login is blocked; headless authenticated browsing and cookie-authenticated `fetch()` are allowed).
+**Glue Up mutation (local).** `ensure` reuses or creates a draft, ensures campaign shells, and records IDs in the manifest. Draft creation runs the full 3-step Glue Up internal AJAX flow (AddEvent → blueprintSubmit → EventSessionSubmit) when reuse is not possible. Verified live: it created event `185166` with title, start/end date+time, and venue populated from `event.json`; a later run created event `185174` plus campaign drafts `508089` and `508090`. Glue Up mutation must run locally because Glue Up's login is behind Cloudflare (headless login is blocked; headless authenticated browsing and cookie-authenticated `fetch()` are allowed).
 
 The runs are keyed by an event slug `evt-<year>-<NNN>` (e.g. `evt-2026-006`), used for the `runs/` subdir and the CI artifact name.
 
@@ -35,10 +38,11 @@ Glue Up already has approved templates. Do not generate event pages or email cam
 The automation should:
 
 1. Select the approved Glue Up event template.
-2. Create a Glue Up event draft from the selected blueprint.
+2. Reuse or create a Glue Up event draft from the selected blueprint.
 3. Fill the draft using structured event data and Drive images.
-4. After the event page exists, create campaigns from approved Glue Up campaign templates.
-5. Schedule those campaigns for one week before and one day before the event at 4:00 AM.
+4. After the event page exists, reuse or create campaigns from approved Glue Up campaign templates.
+5. Never publish automatically; a human reviews and publishes manually.
+6. Schedule those campaigns for one week before and one day before the event at 4:00 AM.
 
 ## Event Types and Blueprints
 
@@ -70,7 +74,7 @@ Copied cookies/tokens from browser devtools are examples only. Treat them like p
 - `src/glueup/campaignCreate.js`
   - `addCampaign` creates an invitation campaign draft through `/crm/people/ajax` action `AddCampaign`, and `parseAddCampaignResult` reads the new campaign ID out of the response redirect. `fetchCampaignCsrfToken` pulls a fresh per-page CSRF token.
 
-`draftCreate.js` and `campaignCreate.js` are both wired into the CLI. `create-draft` now creates the event draft **and** two invitation campaign drafts (week-before, day-before), recording their IDs in `manifest.glueUp.campaigns`. Scheduling is the remaining gap (see below).
+`draftCreate.js` and `campaignCreate.js` are both wired into the CLI. `ensure` now records the event draft ID and two invitation campaign draft IDs (week-before, day-before) in `manifest.glueUp.campaigns`. `populate` applies event/campaign setup, and `finalize` schedules campaigns after manual publish.
 
 ## Campaign flow — reverse-engineered via probe (2026-06-15)
 
@@ -98,7 +102,7 @@ The admin UI's campaign wizard, as captured, is:
 
 ### Publish gate (confirmed)
 
-CREATING an invitation campaign draft works on an UNPUBLISHED event. SCHEDULING/sending is hard-gated: on an unpublished event Glue Up pops "Please publish your event" and blocks the send. So the publish gate sits **between create and schedule**, not before create — which is why `create-draft` stages event + campaign drafts pre-publish, and scheduling must be a separate post-publish step. Also: `EventInvitationCampaign` is only OFFERED as a type on upcoming events (a past event only offers `RegularEventCampaign`).
+CREATING an invitation campaign draft works on an UNPUBLISHED event. SCHEDULING/sending is hard-gated: on an unpublished event Glue Up pops "Please publish your event" and blocks the send. So the publish gate sits **between ensure/populate and finalize**, not before campaign shell creation. Also: `EventInvitationCampaign` is only OFFERED as a type on upcoming events (a past event only offers `RegularEventCampaign`).
 
 ### Confirmed gap: campaign setup payloads
 
@@ -111,7 +115,7 @@ CREATING an invitation campaign draft works on an UNPUBLISHED event. SCHEDULING/
 
 Use `probe-campaign -- --event <eventId> --campaign <campaignId> --capture-values` against one of the existing draft campaigns to capture the real setup payloads into `.glueup-debug/campaign-probe.json`. Do not implement replay from the old value-free report, because it only contains key paths/types and would risk clobbering approved template content.
 
-The captured setup pattern is now folded into `create-draft`. Each `AddCampaign` result is immediately followed by recipient filters, negative filters, setup, and content replay. The default recipient setup includes Contacts, and the default negative filter excludes all attendees for the same event.
+The captured setup pattern is now folded into `populate`. The default recipient setup includes Contacts, and the default negative filter excludes all attendees for the same event.
 
 The captured payload can still be replayed manually against every campaign in a run manifest for repair/debug:
 
@@ -123,8 +127,7 @@ This rewrites event-specific filter keys to the manifest's Glue Up event ID, rew
 
 ## Recommended Next Step
 
-1. Run a fresh end-to-end `create-draft` test against event 7 and inspect the resulting campaign recipients/setup/content in Glue Up.
-2. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
+Run a fresh end-to-end `ensure`, `populate`, manual review/publish, and `finalize` test against the next event. Inspect the resulting campaign recipients/setup/content in Glue Up before publishing.
 
 ## Junk Draft Cleanup
 
@@ -151,34 +154,32 @@ Behavior:
 3. Signs in manually, or with `GLUEUP_EMAIL` / `GLUEUP_PASSWORD` when Glue Up shows a login form.
 4. Waits until `/events/draft` is loaded, then captures cookies and the CSRF token from the page.
 
-Auth resolution order for `create-draft` (`ensureGlueUpAuth`): `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment → a still-valid saved `.glueup-session/` (probed headlessly, non-interactive, fails fast) → a headed login that opens a visible browser only when the saved session is missing or expired. The happy path never prompts.
+Auth resolution order for local Glue Up commands (`ensureGlueUpAuth`): `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment → a still-valid saved `.glueup-session/` (probed headlessly, non-interactive, fails fast) → a headed login that opens a visible browser only when the saved session is missing or expired. The happy path never prompts.
 
-## Ensure / populate commands
+## Ensure / populate / finalize commands
 
-The Glue Up workflow is split so existing drafts can be reused instead of renamed `PLEASE IGNORE`. Ensure commands create missing shells; populate commands update already-known Glue Up objects.
+The Glue Up workflow is split so existing drafts can be reused instead of renamed `PLEASE IGNORE`.
 
 ```bash
-npm run ensure-draft -- 6                  # fresh prepare + create a Glue Up draft only if needed
-npm run ensure-campaigns -- --event 6      # create missing campaign shells only
-npm run populate-draft -- --event 6        # update an existing draft's basic event settings
-npm run populate-campaigns -- --event 6    # apply recipients/setup/content to existing campaigns
-npm run schedule-campaigns -- --event 6 --confirm # post-publish scheduling
+npm run ensure -- 6                  # pull event data, ensure session, draft, and campaigns
+npm run populate -- --event 6        # update existing draft/campaigns
+npm run finalize -- --event 6 --confirm # post-publish scheduling
 ```
 
-`create-draft` remains as a compatibility wrapper for `ensure-draft`, `ensure-campaigns`, and `populate-campaigns`. With no args, `ensure-draft` or `create-draft` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. Use `--event` only when intentionally targeting an older prepared run.
+With no args, `ensure` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. Use `--event` only when intentionally targeting an older prepared run.
 
 Behavior:
 
 1. Resolves the run directory (pull-latest / `--event` / `--fresh` / `--run`).
 2. Reads `manifest.json`, `template-selection.json`, and `event.json`.
 3. Uses `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
-4. `ensure-draft` reuses `manifest.glueUp.eventId` when present and template-compatible. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; pass `--poll-artifacts` to download recent successful prepare artifacts before scanning.
-5. `ensure-campaigns` reuses existing campaign IDs by key and creates only missing week-before/day-before campaign shells.
-6. `populate-draft` updates the existing draft's basic event settings through the settings page.
-7. `populate-campaigns` applies the default recipients/setup/content payloads to existing campaign IDs.
-8. `schedule-campaigns` posts `schedule-campaign` after publish and requires `--confirm`; use `--dry-run` to write `campaign-schedule-plan.json`.
+4. `ensure` reuses `manifest.glueUp.eventId` when present and template-compatible. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; pass `--poll-artifacts` to download recent successful prepare artifacts before scanning.
+5. `ensure` reuses existing campaign IDs by key and creates only missing week-before/day-before campaign shells.
+6. `populate` updates the existing draft's basic event settings through the settings page and applies the default recipients/setup/content payloads to existing campaign IDs.
+7. The human reviews and publishes manually in Glue Up.
+8. `finalize` posts `schedule-campaign` after publish and requires `--confirm`; use `--dry-run` to write `campaign-schedule-plan.json`.
 
-`ensure-draft` requires the `gh` CLI (authenticated) to pull artifacts.
+`ensure` requires the `gh` CLI (authenticated) to pull artifacts.
 
 Standalone steps if you want to pre-stage or refresh auth separately:
 
@@ -187,12 +188,12 @@ npm run sync-run -- --event 6 [--fresh]   # download an artifact only
 npm run glueup-login                      # refresh the saved browser session only
 ```
 
-Treat these as debug/support commands. The preferred operator path is now the explicit ensure/populate sequence; `create-draft` is only a compatibility wrapper.
+Treat these as debug/support commands. The preferred operator path is `ensure`, `populate`, manual publish, then `finalize`.
 
 Dry run (no Glue Up auth required):
 
 ```bash
-npm run create-draft -- --event 6 --dry-run
+npm run ensure -- --event 6 --dry-run
 ```
 
 This writes `draft-create-plan.json` with the blueprint and request shape that would be sent.
