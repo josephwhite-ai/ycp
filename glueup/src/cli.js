@@ -2,7 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   getConfig,
   loadDotEnv,
@@ -50,6 +50,8 @@ try {
     await createDraft(args);
   } else if (command === "apply-campaign-setup") {
     await applyCapturedCampaignSetup(args);
+  } else if (command === "mark-ignore") {
+    await markIgnore(args);
   } else if (command === "glueup-login") {
     await glueupLogin(args);
   } else if (command === "sync-run") {
@@ -351,6 +353,90 @@ async function applyCapturedCampaignSetup(args) {
   console.log(`Updated ${join(runDir, "manifest.json")}`);
 }
 
+async function markIgnore(args) {
+  const runDir = resolveRunDir(args);
+  const manifest = await readJson(join(runDir, "manifest.json"));
+  const eventId = manifest?.glueUp?.eventId;
+  const campaigns = (manifest?.glueUp?.campaigns || []).filter((campaign) => campaign.campaignId);
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId.`);
+
+  const title = String(args.title || "PLEASE IGNORE");
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const authNotes = {
+    env: "Using GLUEUP_COOKIE/CSRF from the environment.",
+    session: "Using saved Glue Up session.",
+    login: "Logged in to Glue Up."
+  };
+  if (authNotes[auth.source]) console.log(authNotes[auth.source]);
+
+  await markEventIgnoreViaSettingsPage({ eventId, title, headless: !args.headed });
+  console.log(`Marked event ${eventId}: ${title}`);
+
+  for (const campaign of campaigns) {
+    const payloads = buildDefaultCampaignSetupPayloads({
+      eventId,
+      event: { eventName: title },
+      campaign: { ...campaign, title }
+    }).filter((payload) => payload.action === "SetupCampaignFormSubmit");
+    await applyCampaignSetup({
+      eventId,
+      campaignId: campaign.campaignId,
+      payloads,
+      cookie: auth.cookie,
+      orgId: auth.orgId
+    });
+    campaign.title = title;
+    campaign.ignoredAt = new Date().toISOString();
+    console.log(`Marked campaign ${campaign.campaignId}: ${title}`);
+  }
+
+  manifest.status = "ignored";
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    ignoredAt: new Date().toISOString(),
+    ignoreTitle: title,
+    campaigns: campaigns.length === (manifest.glueUp?.campaigns || []).length ? campaigns : manifest.glueUp.campaigns
+  };
+  await writeJson(join(runDir, "manifest.json"), manifest);
+  console.log(`Updated ${join(runDir, "manifest.json")}`);
+}
+
+async function markEventIgnoreViaSettingsPage({ eventId, title, headless }) {
+  const { chromium } = await import("playwright");
+  const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless,
+    viewport: { width: 1440, height: 1000 }
+  });
+  const page = context.pages()[0] || (await context.newPage());
+  try {
+    await page.goto(`https://ycp.glueup.com/events/${eventId}/setup/settings/general/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.locator('input[name="title"]').first().waitFor({ state: "visible", timeout: 60_000 });
+    await page.locator('input[name="title"]').first().fill(title);
+    const responsePromise = page
+      .waitForResponse((response) =>
+        response.url().includes(`/events/${eventId}/setup/settings/general/ajax`) &&
+        response.request().method() === "POST"
+      )
+      .catch(() => null);
+    await page.locator('button.save-button, [data-event="StandardForm::submit"]').first().click();
+    const response = await responsePromise;
+    if (response && !response.ok()) {
+      throw new Error(`Glue Up settings save failed ${response.status()}.`);
+    }
+    await page.waitForTimeout(1_000);
+    const currentTitle = await page.locator('input[name="title"]').first().inputValue();
+    if (currentTitle !== title) {
+      throw new Error(`Glue Up settings save did not persist the ignore title; current title is "${currentTitle}".`);
+    }
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 async function glueupLogin(args) {
   const auth = await loginGlueUp({ headless: args.headless ?? false });
   console.log(`Session saved. Org ID: ${auth.orgId}`);
@@ -547,6 +633,7 @@ Usage:
   npm run create-draft -- --event 6         # target a specific older event
   npm run create-draft -- --event 6 --fresh # explicit long form of the normal path
   npm run apply-campaign-setup -- --event 6 # replay captured recipient/setup/content payloads
+  npm run mark-ignore -- --event 6 --headed # rename a junk draft/campaigns to PLEASE IGNORE
 
 Support/debug commands:
   npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only; create-draft is the normal entrypoint
@@ -564,5 +651,6 @@ Options:
   --fresh            Dispatch the prepare workflow and wait for it before downloading
   --headed           (Unused now; login always opens a visible browser when needed)
   --probe path        Defaults to .glueup-debug/campaign-probe.json for apply-campaign-setup
+  --title text        Defaults to PLEASE IGNORE for mark-ignore
 `);
 }

@@ -126,6 +126,16 @@ This rewrites event-specific filter keys to the manifest's Glue Up event ID, rew
 1. Run a fresh end-to-end `create-draft` test against event 7 and inspect the resulting campaign recipients/setup/content in Glue Up.
 2. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
 
+## Junk Draft Cleanup
+
+Actual draft deletion was probed against event `185176`, but the draft list only rendered `Manage`, `View Event Website`, and `Duplicate`, and likely internal `DeleteEvent` AJAX actions were no-ops. Use the soft cleanup command instead:
+
+```bash
+npm run mark-ignore -- --event 7 --headed
+```
+
+This renames the draft event and each campaign's setup title/subject to exactly `PLEASE IGNORE`.
+
 ## Playwright Session Auth
 
 Glue Up draft creation normally starts from `https://ycp.glueup.com/events/draft`. The Playwright layer uses that page as the authenticated workspace.
