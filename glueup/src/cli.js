@@ -12,12 +12,17 @@ import {
   monthInfoFromFolderName
 } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
-import { extractEventFromGoogleDoc } from "./extract/docsTableExtractor.js";
+import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
-import { addCampaign, applyCampaignSetup, extractCampaignSetupPayloads } from "./glueup/campaignCreate.js";
+import {
+  addCampaign,
+  applyCampaignSetup,
+  buildDefaultCampaignSetupPayloads,
+  extractCampaignSetupPayloads
+} from "./glueup/campaignCreate.js";
 import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
 
 // Two invitation campaigns per event — one to send a week before, one a day
@@ -160,11 +165,16 @@ async function validate(args) {
 async function createDraft(args) {
   const runDir = await prepareRunForDraft(args);
 
-  const [manifest, templateSelection, event] = await Promise.all([
+  const [manifest, templateSelection, rawEvent] = await Promise.all([
     readJson(join(runDir, "manifest.json")),
     readJson(join(runDir, "template-selection.json")),
     readJson(join(runDir, "event.json"))
   ]);
+  const event = normalizeEventFields(rawEvent);
+  if (event.eventName !== rawEvent.eventName) {
+    await writeJson(join(runDir, "event.json"), event);
+    console.log(`Normalized event title: ${event.eventName}`);
+  }
   const config = getConfig({ timezone: args.timezone });
 
   const selected = templateSelection?.selected;
@@ -232,7 +242,8 @@ async function createDraft(args) {
     eventType: selected.glueUp.eventType,
     campaigns
   };
-  manifest.status = "draft_created";
+  manifest.status =
+    campaigns.length > 0 && campaigns.every((campaign) => campaign.setupAppliedAt) ? "campaigns_setup" : "draft_created";
 
   await Promise.all([
     writeJson(join(runDir, "manifest.json"), manifest),
@@ -245,6 +256,8 @@ async function createDraft(args) {
   for (const campaign of campaigns) {
     if (campaign.campaignId) {
       console.log(`Campaign (${campaign.label}): ${campaign.campaignUrl}`);
+      if (campaign.setupAppliedAt) console.log(`  Setup applied at ${campaign.setupAppliedAt}`);
+      if (campaign.setupError) console.log(`  Setup FAILED: ${campaign.setupError}`);
     } else {
       console.log(`Campaign (${campaign.label}) FAILED: ${campaign.error}`);
     }
@@ -266,7 +279,20 @@ async function createInvitationCampaigns({ eventId, event, cookie, orgId }) {
     const title = `${baseTitle} — Invitation (${label})`;
     try {
       const created = await addCampaign({ eventId, title, cookie, orgId });
-      results.push({ key, label, title, campaignId: created.campaignId, campaignUrl: created.campaignUrl });
+      const campaign = { key, label, title, campaignId: created.campaignId, campaignUrl: created.campaignUrl };
+      try {
+        await applyCampaignSetup({
+          eventId,
+          campaignId: created.campaignId,
+          payloads: buildDefaultCampaignSetupPayloads({ eventId, event, campaign }),
+          cookie,
+          orgId
+        });
+        campaign.setupAppliedAt = new Date().toISOString();
+      } catch (setupError) {
+        campaign.setupError = setupError?.message || String(setupError);
+      }
+      results.push(campaign);
     } catch (error) {
       results.push({ key, label, title, campaignId: null, error: error?.message || String(error) });
     }
