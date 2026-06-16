@@ -322,7 +322,7 @@ async function syncLatestEvent() {
   );
   if (!runs.length) {
     throw new Error(
-      `No successful ${PREPARE_WORKFLOW} run found. Dispatch one with: npm run create-draft -- --event <index> --fresh`
+      `No successful ${PREPARE_WORKFLOW} run found. Dispatch one with: npm run create-draft -- <index>`
     );
   }
 
@@ -405,14 +405,16 @@ function ghCapture(argv) {
   return execFileSync("gh", argv, { encoding: "utf8" });
 }
 
-// Resolve the run for create-draft. With no flags it pulls the latest successful
-// prepare run from CI and infers the event — the index is named once, on GitHub.
-// --fresh dispatches a new prepare (the one place you name the index locally);
+// Resolve the run for create-draft. The normal shorthand is positional:
+// `npm run create-draft -- 6`, which dispatches a fresh prepare and creates the
+// draft. With no flags it pulls the latest successful prepare run from CI.
 // --event N targets a specific older event; --run path uses a local run as-is.
 async function prepareRunForDraft(args) {
   if (args.run) return args.run;
 
-  if (args.fresh) {
+  const positionalEvent = args.event === undefined ? args._?.[1] : undefined;
+
+  if (args.fresh || positionalEvent !== undefined) {
     const eventInfo = parseEvent(args);
     await syncEvent(eventInfo, { fresh: true });
     return join("runs", eventInfo.slug);
@@ -441,7 +443,7 @@ async function readJson(path) {
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new Error(
-        `Missing run file "${path}". Prepare the run first with:\n  npm run monthly-prepare -- --event 6\nOr download the glueup-run artifact from GitHub Actions into glueup/runs/.`
+        `Missing run file "${path}". Use the local entrypoint to prepare and create in one flow:\n  npm run create-draft -- 6\nFor debugging only, you can pre-stage an artifact with:\n  npm run sync-run -- --event 6 --fresh`
       );
     }
     throw error;
@@ -452,14 +454,15 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
+  npm run create-draft -- 6                  # dispatch a fresh prepare run, then create the draft
   npm run create-draft                      # pull the latest prepared event from CI + create the draft
   npm run create-draft -- --event 6         # target a specific older event
-  npm run create-draft -- --event 6 --fresh # dispatch a new prepare run, then create the draft
+  npm run create-draft -- --event 6 --fresh # explicit long form of the normal path
 
-Other commands:
-  npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only
+Support/debug commands:
+  npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only; create-draft is the normal entrypoint
   npm run glueup-login                      # refresh the saved browser session only
-  npm run monthly-prepare -- --event 6
+  npm run monthly-prepare -- --event 6      # CI prepare backend; usually dispatched by create-draft --fresh
   npm run validate -- --run runs/evt-2026-006
 
 Options:

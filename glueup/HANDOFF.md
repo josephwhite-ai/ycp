@@ -2,7 +2,15 @@
 
 ## Current Status
 
-Two halves are working end-to-end:
+One operator entrypoint is working end-to-end for the pre-publish stage:
+
+```bash
+npm run create-draft -- 6
+```
+
+That local command treats GitHub Actions as the prepare backend, then uses the local saved Glue Up browser session for mutations. Avoid introducing a second normal operator path where users prepare in GitHub and then remember separate local follow-up commands; `create-draft` should stay the public interface.
+
+Under the hood, two halves are working:
 
 **Prepare (GitHub Actions).** The `Glue Up Prepare` workflow (`glueup-monthly-prepare.yml`, dispatch-only) runs against a single event identified by its index. It:
 
@@ -16,7 +24,7 @@ Two halves are working end-to-end:
 - Generates event-template field briefs and campaign-template fill briefs.
 - Uploads `glueup/runs/<slug>/` as the artifact `glueup-run-evt-<year>-<NNN>`.
 
-**Draft creation (local).** `create-draft` runs the full 3-step Glue Up internal AJAX flow (AddEvent → blueprintSubmit → EventSessionSubmit) and produces a real event with an ID. Verified live: it created event `185166` with title, start/end date+time, and venue populated from `event.json`. The draft step must run locally because Glue Up's login is behind Cloudflare (headless login is blocked; headless authenticated browsing and cookie-authenticated `fetch()` are allowed).
+**Draft creation (local).** `create-draft` runs the full 3-step Glue Up internal AJAX flow (AddEvent → blueprintSubmit → EventSessionSubmit) and produces a real event with an ID. Verified live: it created event `185166` with title, start/end date+time, and venue populated from `event.json`; a later run created event `185174` plus campaign drafts `508089` and `508090`. The draft step must run locally because Glue Up's login is behind Cloudflare (headless login is blocked; headless authenticated browsing and cookie-authenticated `fetch()` are allowed).
 
 The runs are keyed by an event slug `evt-<year>-<NNN>` (e.g. `evt-2026-006`), used for the `runs/` subdir and the CI artifact name.
 
@@ -53,7 +61,7 @@ Glue Up browser/session values must not be committed. The current low-level AJAX
 - `GLUEUP_COOKIE`
 - `GLUEUP_CSRF_TOKEN`
 
-Copied cookies/tokens from browser devtools are examples only. Treat them like passwords.
+Copied cookies/tokens from browser devtools are examples only. Treat them like passwords. For this public repo, do not move Glue Up cookies/tokens into GitHub Actions secrets unless the deployment model changes to a private, locked-down runner with a clear rotation plan.
 
 ## Implemented Glue Up AJAX Helpers
 
@@ -118,11 +126,12 @@ Auth resolution order for `create-draft` (`ensureGlueUpAuth`): `GLUEUP_COOKIE` +
 
 ```bash
 npm run create-draft                      # pull the LATEST successful prepare run from CI, infer the event, create the draft
+npm run create-draft -- 6                  # normal path: fresh prepare + create draft
 npm run create-draft -- --event 6         # target a specific older event (syncs only if not already on disk)
 npm run create-draft -- --event 6 --fresh # dispatch a new prepare run, wait for it, then create the draft
 ```
 
-The event index is named once — on GitHub. With no args, `create-draft` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. `--fresh` is the one place you name the index for a brand-new prepare.
+The event index is named once, positionally, for the normal fresh path. With no args, `create-draft` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. Use `--event` only when intentionally targeting an older prepared run.
 
 Behavior:
 
@@ -142,6 +151,8 @@ Standalone steps if you want to pre-stage or refresh auth separately:
 npm run sync-run -- --event 6 [--fresh]   # download an artifact only
 npm run glueup-login                      # refresh the saved browser session only
 ```
+
+Treat these as debug/support commands. The preferred operator path remains `create-draft`.
 
 Dry run (no Glue Up auth required):
 

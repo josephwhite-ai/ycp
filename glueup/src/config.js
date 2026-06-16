@@ -54,13 +54,15 @@ export function eventSlug(year, index) {
   return `evt-${year}-${String(index).padStart(3, "0")}`;
 }
 
-export function parseEvent({ event, year } = {}) {
+export function parseEvent(args = {}) {
+  const event = args.event ?? args._?.[1];
+  const { year } = args;
   if (event === undefined || event === true) {
-    throw new Error("Missing --event <index>. Example: --event 6");
+    throw new Error("Missing event index. Example: npm run create-draft -- 6");
   }
   const index = Number(String(event).trim());
   if (!Number.isInteger(index) || index < 1) {
-    throw new Error(`Invalid --event "${event}". Use a positive integer event index, e.g. 6.`);
+    throw new Error(`Invalid event index "${event}". Use a positive integer, e.g. 6.`);
   }
 
   const resolvedYear = year === undefined ? new Date().getFullYear() : Number(year);

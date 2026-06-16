@@ -1,10 +1,28 @@
 # Glue Up Agent
 
-Automation for preparing monthly Glue Up event-page inputs from Google Drive event data, selecting the approved Glue Up event template, and producing campaign-template fill briefs for later campaign creation.
+Automation for preparing Glue Up event-page inputs from Google Drive event data, selecting the approved Glue Up event template, creating local Glue Up drafts, and staging invitation campaign drafts for review.
 
-## First milestone
+## Operator workflow
 
-The current implementation intentionally stops before mutating Glue Up. It:
+For normal use, run one local command from this directory:
+
+```bash
+npm run create-draft -- 6
+```
+
+That command dispatches the GitHub Actions prepare workflow, downloads the resulting artifact, ensures a local Glue Up session, creates the event draft from the approved Glue Up blueprint, and creates the two invitation campaign drafts. The event index is the leading number in a Drive folder like `06 - June 2026 - NHH`.
+
+If the prepare workflow was already run successfully, omit `--fresh` and let the local command pull the latest prepared event:
+
+```bash
+npm run create-draft
+```
+
+The GitHub Actions workflow is the prepare backend, not a separate end-user workflow. Glue Up mutation stays local because Glue Up login is behind Cloudflare and requires a browser-backed session.
+
+## What It Does
+
+The current implementation:
 
 1. Finds the monthly event folder under the top-level Drive events folder.
 2. Finds `<Month> <Year> - Event Summary Sheet`.
@@ -14,6 +32,8 @@ The current implementation intentionally stops before mutating Glue Up. It:
 6. Lists likely photo assets.
 7. Generates local event-template field briefs and campaign-template fill briefs.
 8. Writes a validation report.
+9. Creates a Glue Up event draft from the selected approved blueprint.
+10. Creates two invitation campaign drafts, one for the week-before send and one for the day-before send.
 
 The agent should not design new event pages or email campaigns from scratch. Glue Up is treated as the source of approved event and campaign templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
 
@@ -43,7 +63,7 @@ Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls w
 
 Each run targets one event, identified by its index — a counter unique across the year (the leading number in a folder like `06 - June 2026 - NHH`). The year defaults to the current year.
 
-Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step must run locally because Glue Up's login is behind Cloudflare. `create-draft` bridges both halves in one command: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and runs the create flow.
+Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step runs locally because Glue Up's login is behind Cloudflare. `create-draft` bridges both halves in one command: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and runs the create flow.
 
 `create-draft` stages everything that can be done **before publishing**: it creates the event draft and then two invitation campaign drafts (one to send a week before, one a day before), recording their IDs in `manifest.json` under `glueUp.campaigns`. You then review the event and both campaigns together and publish the event in Glue Up — a deliberate manual step, since publishing is effectively irreversible. Scheduling the campaigns is gated on publish and runs as a separate post-publish step (not yet wired into the CLI).
 
@@ -53,9 +73,10 @@ With no arguments, `create-draft` pulls the **latest successful prepare run** fr
 npm run create-draft                      # latest prepared event + login if needed + create draft
 ```
 
-Name an index locally only to target a specific older event, or with `--fresh` to dispatch a new prepare run (the one place the index is named for a fresh run). Add `--year 2025` for a past year:
+Name an index positionally for the normal fresh path. Use `--event` only to target a specific older prepared run. Add `--year 2025` for a past year:
 
 ```bash
+npm run create-draft -- 6                  # normal path: fresh prepare + create draft
 npm run create-draft -- --event 6         # target a specific older event
 npm run create-draft -- --event 6 --fresh # dispatch a new prepare, wait, then create the draft
 ```
@@ -85,7 +106,7 @@ export GLUEUP_PASSWORD="..."
 npm run glueup-login
 ```
 
-Glue Up's login sits behind Cloudflare bot management, so headless/CI login is blocked — `glueup-login` must run with a visible browser (the default). There is no CI login workflow. For automation, capture `GLUEUP_COOKIE` and `GLUEUP_CSRF_TOKEN` from a local `glueup-login` and export them (or store as repo secrets), refreshing when the session expires.
+Glue Up's login sits behind Cloudflare bot management, so headless/CI login is blocked — `glueup-login` must run with a visible browser (the default). There is no CI login workflow, and Glue Up cookies/tokens should not be stored as repository secrets for this public repo. The normal path is to reuse the gitignored local `.glueup-session/` browser profile, refreshing it with `npm run glueup-login` when it expires.
 
 Session cookies and CSRF tokens are intentionally not stored in source files. They expire and should be treated like passwords.
 
@@ -121,16 +142,18 @@ You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallba
 ## Commands
 
 ```bash
-npm run monthly-prepare -- --event 6
-npm run validate -- --run runs/evt-2026-006
-npm run create-draft -- --event 6
+npm run create-draft -- 6
+npm run create-draft
 npm run glueup-login
 npm run check
 ```
 
-Useful options:
+Debug/backend commands:
 
 ```bash
+npm run monthly-prepare -- --event 6
+npm run sync-run -- --event 6 --fresh
+npm run validate -- --run runs/evt-2026-006
 npm run monthly-prepare -- --event 6 --dry-run
 npm run monthly-prepare -- --event 6 --year 2025
 npm run monthly-prepare -- --event 6 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
@@ -140,9 +163,11 @@ npm run monthly-prepare -- --event 6 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnM
 
 Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. The leading number is the event index — a counter unique across the year — and is the only thing needed to select an event (`--event 6`). The month is read back from the folder name to locate that month's summary doc.
 
-## Deployment direction
+## Deployment Model
 
-Start local, then move the same CLI to GitHub Actions. If Glue Up browser automation becomes central or more robustness is needed, run it in Cloud Run triggered by Cloud Scheduler.
+Use one normal entrypoint: the local `create-draft` command. It treats GitHub Actions as a remote prepare worker, then performs Glue Up mutations locally with the saved browser session. This keeps the Google Drive service-account work reproducible in CI while avoiding a brittle second Glue Up login path in the cloud.
+
+If the local browser requirement becomes painful later, the next deployment target should be a small always-on browser runner with a persisted session, not a second public GitHub Actions mutation workflow.
 
 ## GitHub Actions setup
 
@@ -154,7 +179,7 @@ Add these repository secrets/variables:
 - Secret `OPENAI_API_KEY`: optional; deterministic template fill briefs work without it.
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
 
-The workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact named `glueup-run-evt-<year>-<index>`. Creating or publishing Glue Up objects happens in later workflow stages.
+The workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact named `glueup-run-evt-<year>-<index>`. Creating, publishing, or scheduling Glue Up objects does not happen in GitHub Actions.
 
 ## Campaign creation
 
