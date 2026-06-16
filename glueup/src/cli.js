@@ -17,7 +17,7 @@ import { generateArtifacts } from "./generate/contentGenerator.js";
 import { validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { buildDraftCreateRequest, createDraftFromBlueprint } from "./glueup/draftCreate.js";
-import { addCampaign } from "./glueup/campaignCreate.js";
+import { addCampaign, applyCampaignSetup, extractCampaignSetupPayloads } from "./glueup/campaignCreate.js";
 import { ensureGlueUpAuth, loginGlueUp } from "./glueup/session.js";
 
 // Two invitation campaigns per event — one to send a week before, one a day
@@ -43,6 +43,8 @@ try {
     await validate(args);
   } else if (command === "create-draft") {
     await createDraft(args);
+  } else if (command === "apply-campaign-setup") {
+    await applyCapturedCampaignSetup(args);
   } else if (command === "glueup-login") {
     await glueupLogin(args);
   } else if (command === "sync-run") {
@@ -272,6 +274,57 @@ async function createInvitationCampaigns({ eventId, event, cookie, orgId }) {
   return results;
 }
 
+async function applyCapturedCampaignSetup(args) {
+  const runDir = resolveRunDir(args);
+  const probePath = args.probe || ".glueup-debug/campaign-probe.json";
+  const [manifest, event, probeReport] = await Promise.all([
+    readJson(join(runDir, "manifest.json")),
+    readJson(join(runDir, "event.json")),
+    readJson(probePath)
+  ]);
+
+  const eventId = manifest?.glueUp?.eventId;
+  const campaigns = manifest?.glueUp?.campaigns || [];
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId.`);
+  const targetCampaigns = campaigns.filter((campaign) => campaign.campaignId);
+  if (!targetCampaigns.length) {
+    throw new Error(`${join(runDir, "manifest.json")} has no campaign IDs to set up.`);
+  }
+
+  if (!probeReport?.captureValues) {
+    throw new Error(`${probePath} was not captured with --capture-values.`);
+  }
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const authNotes = {
+    env: "Using GLUEUP_COOKIE/CSRF from the environment.",
+    session: "Using saved Glue Up session.",
+    login: "Logged in to Glue Up."
+  };
+  if (authNotes[auth.source]) console.log(authNotes[auth.source]);
+
+  for (const campaign of targetCampaigns) {
+    const payloads = extractCampaignSetupPayloads(probeReport, { eventId, event, campaign });
+    await applyCampaignSetup({
+      eventId,
+      campaignId: campaign.campaignId,
+      payloads,
+      cookie: auth.cookie,
+      orgId: auth.orgId
+    });
+    campaign.setupAppliedAt = new Date().toISOString();
+    console.log(`Applied setup: ${campaign.label} (${campaign.campaignId})`);
+  }
+
+  manifest.status = "campaigns_setup";
+  manifest.glueUp = {
+    ...(manifest.glueUp || {}),
+    campaigns: targetCampaigns.length === campaigns.length ? targetCampaigns : campaigns
+  };
+  await writeJson(join(runDir, "manifest.json"), manifest);
+  console.log(`Updated ${join(runDir, "manifest.json")}`);
+}
+
 async function glueupLogin(args) {
   const auth = await loginGlueUp({ headless: args.headless ?? false });
   console.log(`Session saved. Org ID: ${auth.orgId}`);
@@ -433,6 +486,15 @@ async function prepareRunForDraft(args) {
   return join("runs", slug);
 }
 
+function resolveRunDir(args) {
+  if (args.run) return args.run;
+  if (args.event !== undefined || args._?.[1] !== undefined) {
+    const eventInfo = parseEvent(args);
+    return join("runs", eventInfo.slug);
+  }
+  throw new Error("Missing run target. Example: npm run apply-campaign-setup -- --event 6");
+}
+
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -458,6 +520,7 @@ Usage:
   npm run create-draft                      # pull the latest prepared event from CI + create the draft
   npm run create-draft -- --event 6         # target a specific older event
   npm run create-draft -- --event 6 --fresh # explicit long form of the normal path
+  npm run apply-campaign-setup -- --event 6 # replay captured recipient/setup/content payloads
 
 Support/debug commands:
   npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only; create-draft is the normal entrypoint
@@ -474,5 +537,6 @@ Options:
   --dry-run
   --fresh            Dispatch the prepare workflow and wait for it before downloading
   --headed           (Unused now; login always opens a visible browser when needed)
+  --probe path        Defaults to .glueup-debug/campaign-probe.json for apply-campaign-setup
 `);
 }

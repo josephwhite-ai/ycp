@@ -1,13 +1,18 @@
 // Headed Playwright probe for reverse-engineering Glue Up's campaign + schedule
-// AJAX. It records every campaign-related request value-free (action names, data
-// key paths, value types/lengths — never token/cookie values, since this repo is
-// public) and ABORTS any request whose action matches BLOCK_PATTERN before it
-// reaches Glue Up. That lets you click "schedule"/"send" to capture the payload
-// shape while nothing actually fires server-side.
+// AJAX. By default it records every campaign-related request value-free (action
+// names, data key paths, value types/lengths — never token/cookie values, since
+// this repo is public) and ABORTS any request whose action matches BLOCK_PATTERN
+// before it reaches Glue Up. That lets you click "schedule"/"send" to capture
+// the payload shape while nothing actually fires server-side.
+//
+// Pass --capture-values only when you need replayable setup payloads. The report
+// is still written to gitignored .glueup-debug/, and token/cookie/password-like
+// fields remain redacted, but normal recipient/setup/content values are kept.
 //
 // Usage:
 //   node scripts/probe-campaign.mjs                 # default test event 176762
 //   node scripts/probe-campaign.mjs --event 176762
+//   node scripts/probe-campaign.mjs --event 185174 --campaign 508089 --capture-values
 //   node scripts/probe-campaign.mjs --block 'send|schedule|dispatch|deliver|publish'
 //
 // Constraint: probe only against a known-published TEST event, and never let an
@@ -77,24 +82,37 @@ function describeData(value, prefix = "") {
   return out;
 }
 
+function redactSensitiveValues(value) {
+  const visit = (val, key = "") => {
+    if (SECRET_KEYS.test(key)) return "<redacted>";
+    if (val === null || typeof val !== "object") return val;
+    if (Array.isArray(val)) return val.map((item) => visit(item, key));
+    return Object.fromEntries(Object.entries(val).map(([k, v]) => [k, visit(v, k)]));
+  };
+  return visit(value);
+}
+
 function parseBody(request) {
   const raw = request.postData() || "";
   try {
     const params = new URLSearchParams(raw);
     const action = params.get("action");
     let data = null;
+    let dataValue = null;
     const dataRaw = params.get("data");
     if (dataRaw) {
       try {
-        data = describeData(JSON.parse(dataRaw));
+        const parsedData = JSON.parse(dataRaw);
+        data = describeData(parsedData);
+        dataValue = redactSensitiveValues(parsedData);
       } catch {
         data = [{ path: "data", type: "unparsed", length: dataRaw.length }];
       }
     }
     const fields = [...params.keys()].filter((k) => k !== "data");
-    return { action, fields, data };
+    return { action, fields, data, dataValue };
   } catch {
-    return { action: null, fields: [], data: null, rawLength: raw.length };
+    return { action: null, fields: [], data: null, dataValue: null, rawLength: raw.length };
   }
 }
 
@@ -110,6 +128,8 @@ function describeResponseBody(text) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const eventId = String(args.event || DEFAULT_EVENT);
+  const campaignId = args.campaign ? String(args.campaign) : null;
+  const captureValues = Boolean(args.captureValues || args["capture-values"]);
   const blockPattern = new RegExp(String(args.block || DEFAULT_BLOCK), "i");
   const sessionDir = resolve(args.sessionDir || process.env.GLUEUP_SESSION_DIR || DEFAULT_SESSION_DIR);
 
@@ -176,6 +196,9 @@ async function main() {
       data: parsed.data,
       blocked: shouldBlock
     };
+    if (captureValues && parsed.dataValue !== null) {
+      record.dataValue = parsed.dataValue;
+    }
 
     if (shouldBlock) {
       blocked.push(record);
@@ -212,7 +235,9 @@ async function main() {
   function writeReport() {
     const report = {
       eventId,
+      campaignId,
       blockPattern: blockPattern.source,
+      captureValues,
       capturedCount: captured.length,
       blockedCount: blocked.length,
       getCount: gets.length,
@@ -226,12 +251,19 @@ async function main() {
   writeReport();
   console.log(`\nProbe ready. Block pattern: /${blockPattern.source}/i`);
   console.log(`Test event: ${eventId}`);
-  console.log(`Value-free report streams to ${reportPath}`);
-  console.log(`\nIn the browser: open the event, create an invitation campaign, and click`);
-  console.log(`through scheduling. Destructive actions are aborted, not sent.`);
+  console.log(`${captureValues ? "Value-capturing" : "Value-free"} report streams to ${reportPath}`);
+  if (captureValues) {
+    console.log(`Sensitive fields matching /${SECRET_KEYS.source}/i are still redacted.`);
+  }
+  console.log(`\nIn the browser: open or create an invitation campaign, then click`);
+  console.log(`through recipients, exclusions, setup, content, and scheduling.`);
+  console.log(`Destructive actions are aborted, not sent.`);
   console.log(`Close the browser window when done.\n`);
 
-  await page.goto(`${BASE_URL}/events/${eventId}/dashboard/`, {
+  const startPath = campaignId
+    ? `/events/${eventId}/promote/campaigns/${campaignId}/`
+    : `/events/${eventId}/dashboard/`;
+  await page.goto(`${BASE_URL}${startPath}`, {
     waitUntil: "domcontentloaded",
     timeout: 60_000
   });
