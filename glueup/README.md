@@ -10,7 +10,7 @@ For normal use, run one local command from this directory:
 npm run create-draft -- 6
 ```
 
-That command dispatches the GitHub Actions prepare workflow, downloads the resulting artifact, ensures a local Glue Up session, creates the event draft from the approved Glue Up blueprint, and creates the two invitation campaign drafts. The event index is the leading number in a Drive folder like `06 - June 2026 - NHH`.
+That command dispatches the GitHub Actions prepare workflow, downloads the resulting artifact, ensures a local Glue Up session, creates the event draft from the approved Glue Up blueprint, creates the two invitation campaign drafts, and applies the standard recipient/setup/content payload. The event index is the leading number in a Drive folder like `06 - June 2026 - NHH`.
 
 If the prepare workflow was already run successfully, omit `--fresh` and let the local command pull the latest prepared event:
 
@@ -33,7 +33,7 @@ The current implementation:
 7. Generates local event-template field briefs and campaign-template fill briefs.
 8. Writes a validation report.
 9. Creates a Glue Up event draft from the selected approved blueprint.
-10. Creates two invitation campaign drafts, one for the week-before send and one for the day-before send.
+10. Creates and sets up two invitation campaign drafts, one for the week-before send and one for the day-before send.
 
 The agent should not design new event pages or email campaigns from scratch. Glue Up is treated as the source of approved event and campaign templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
 
@@ -65,7 +65,7 @@ Each run targets one event, identified by its index — a counter unique across 
 
 Content prep (Google Drive parsing) runs in GitHub Actions; the Glue Up draft step runs locally because Glue Up's login is behind Cloudflare. `create-draft` bridges both halves in one command: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and runs the create flow.
 
-`create-draft` stages everything that can be done **before publishing**: it creates the event draft and then two invitation campaign drafts (one to send a week before, one a day before), recording their IDs in `manifest.json` under `glueUp.campaigns`. You then review the event and both campaigns together and publish the event in Glue Up — a deliberate manual step, since publishing is effectively irreversible. Scheduling the campaigns is gated on publish and runs as a separate post-publish step (not yet wired into the CLI).
+`create-draft` stages everything that can be done **before publishing**: it creates the event draft and then two invitation campaign drafts (one to send a week before, one a day before), applies recipients/setup/content, and records their IDs in `manifest.json` under `glueUp.campaigns`. You then review the event and both campaigns together and publish the event in Glue Up — a deliberate manual step, since publishing is effectively irreversible. Scheduling the campaigns is gated on publish and runs as a separate post-publish step (not yet wired into the CLI).
 
 With no arguments, `create-draft` pulls the **latest successful prepare run** from CI and infers which event it is from the artifact name — so the event index is named once, on GitHub, and never repeated locally:
 

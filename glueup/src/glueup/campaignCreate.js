@@ -224,6 +224,103 @@ function setupPayloadForCampaign(action, payload, { eventId, event, campaign }) 
   return data;
 }
 
+function eventPreheader(event) {
+  const title = event?.eventName || event?.sourceDocumentTitle || "our next event";
+  return `Join us for ${title}.`;
+}
+
+export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign } = {}) {
+  if (!eventId) throw new Error("Missing Glue Up event ID.");
+  const title = event?.eventName || event?.sourceDocumentTitle || "Event";
+  const payloads = [
+    {
+      action: "recipientFiltersStandardFormSubmit",
+      data: {
+        "OrganizationMembers?status=Accepted": false,
+        "Members?isSmartList=true&listID=16108": false,
+        "Members?isPurchaser=true&status=Active": false,
+        "Members?isPrimary=true&status=Active": false,
+        "Members?status=Active": false,
+        "Subscribers?listID=32924": false,
+        [`Attendees?eventID=${eventId}&isCanceled=true`]: false,
+        [`Attendees?eventID=${eventId}&isCheckedIn=false`]: false,
+        [`Attendees?eventID=${eventId}&isCheckedIn=true`]: false,
+        [`Attendees?eventID=${eventId}&status=Waitlist`]: false,
+        [`Attendees?eventID=${eventId}&status=AwaitingApproval`]: false,
+        [`Attendees?eventID=${eventId}&status=all`]: false,
+        [`Invitees?eventID=${eventId}&status=NoResponse`]: false,
+        [`Invitees?eventID=${eventId}&status=NotSent`]: false,
+        [`Invitees?eventID=${eventId}`]: false,
+        "::ignore::": [true, true],
+        Contacts: true
+      }
+    },
+    {
+      action: "negativeFiltersStandardFormSubmit",
+      data: {
+        "OrganizationMembers?status=Accepted": false,
+        "Members?isSmartList=true&listID=16108": false,
+        "Members?isPurchaser=true&status=Active": false,
+        "Members?isPrimary=true&status=Active": false,
+        "Members?status=Active": false,
+        "Subscribers?listID=32924": false,
+        [`Attendees?eventID=${eventId}&isCanceled=true`]: false,
+        [`Attendees?eventID=${eventId}&isCheckedIn=false`]: false,
+        [`Attendees?eventID=${eventId}&isCheckedIn=true`]: false,
+        [`Attendees?eventID=${eventId}&status=Waitlist`]: false,
+        [`Attendees?eventID=${eventId}&status=AwaitingApproval`]: false,
+        [`Attendees?eventID=${eventId}&status=all`]: true,
+        [`Invitees?eventID=${eventId}&status=NoResponse`]: false,
+        [`Invitees?eventID=${eventId}&status=NotSent`]: false,
+        [`Invitees?eventID=${eventId}`]: false,
+        "Individual?isSubscriber=true": false,
+        "Individual?isWorkingGroup=true": false,
+        Contacts: false
+      }
+    },
+    {
+      action: "SetupCampaignFormSubmit",
+      data: {
+        setup: {
+          type: DEFAULT_CAMPAIGN_TYPE,
+          ccToAssistant: false,
+          additionalRecipients: "",
+          replyTo: "",
+          senderEmail: { code: "64c87d4ce4b050224d5a75b0" },
+          preheader: eventPreheader(event),
+          subject: title,
+          language: { code: "en" },
+          campaignName: campaign?.title || title
+        },
+        submit: "save_and_continue"
+      }
+    },
+    {
+      action: "ContentFormSubmit",
+      data: {
+        blocks: [
+          { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
+          { type: "detailsHeader" },
+          { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
+          { type: "summary" },
+          { type: "rsvp" },
+          {
+            type: "sponsors",
+            "value.groups.6a3096bae4b07b64411cbe1b": true,
+            "value.showTitle": false
+          }
+        ],
+        submit: "save_and_continue"
+      }
+    }
+  ];
+
+  return payloads.map(({ action, data }) => ({
+    action,
+    data: setupPayloadForCampaign(action, data, { eventId, event, campaign })
+  }));
+}
+
 export function extractCampaignSetupPayloads(probeReport, { eventId, event, campaign } = {}) {
   const captured = Array.isArray(probeReport?.captured) ? probeReport.captured : [];
   const byAction = new Map(captured.map((record) => [record.action, record.dataValue]));

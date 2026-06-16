@@ -111,7 +111,9 @@ CREATING an invitation campaign draft works on an UNPUBLISHED event. SCHEDULING/
 
 Use `probe-campaign -- --event <eventId> --campaign <campaignId> --capture-values` against one of the existing draft campaigns to capture the real setup payloads into `.glueup-debug/campaign-probe.json`. Do not implement replay from the old value-free report, because it only contains key paths/types and would risk clobbering approved template content.
 
-The captured payload can be replayed against every campaign in a run manifest:
+The captured setup pattern is now folded into `create-draft`. Each `AddCampaign` result is immediately followed by recipient filters, negative filters, setup, and content replay. The default recipient setup includes Contacts, and the default negative filter excludes all attendees for the same event.
+
+The captured payload can still be replayed manually against every campaign in a run manifest for repair/debug:
 
 ```bash
 npm run apply-campaign-setup -- --event 6 --headed
@@ -121,9 +123,8 @@ This rewrites event-specific filter keys to the manifest's Glue Up event ID, rew
 
 ## Recommended Next Step
 
-1. Inspect campaigns `508089` and `508090` in Glue Up to confirm the replayed recipients/setup/content look correct.
-2. If confirmed, fold the captured setup replay into `create-draft` after `AddCampaign`, so future runs do not need the separate `apply-campaign-setup` command.
-3. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
+1. Run a fresh end-to-end `create-draft` test against event 7 and inspect the resulting campaign recipients/setup/content in Glue Up.
+2. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
 
 ## Playwright Session Auth
 

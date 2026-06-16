@@ -23,7 +23,7 @@ export function extractEventFromGoogleDoc(doc) {
     }
   }
 
-  const event = {
+  const event = normalizeEventFields({
     sourceDocumentTitle: doc.title || "",
     eventType: pick(fields, ["event type", "program type", "template", "format"]) || "",
     eventName:
@@ -38,9 +38,20 @@ export function extractEventFromGoogleDoc(doc) {
     description: cleanText(pick(fields, ["description", "overview", "summary"]) || paragraphs.join("\n\n")),
     rawFields: fields,
     sessions
-  };
+  });
 
   return event;
+}
+
+export function normalizeEventFields(event) {
+  const rawFields = event?.rawFields || {};
+  const explicitTitle = cleanTitleCandidate(pick(rawFields, ["event name", "title", "program title"]));
+  const topic = cleanTitleCandidate(pick(rawFields, ["talk topic (if applicable)", "talk topic", "topic"]));
+  const eventName = cleanTitleCandidate(event?.eventName);
+  return {
+    ...event,
+    eventName: explicitTitle || topic || eventName || event?.sourceDocumentTitle?.replace(/ - Event Summary Sheet$/i, "") || ""
+  };
 }
 
 function extractTable(table) {
@@ -134,6 +145,9 @@ function normalizeDate(value) {
 }
 
 function deriveEventName(fields) {
+  const topic = cleanTitleCandidate(pick(fields, ["talk topic (if applicable)", "talk topic", "topic"]));
+  if (topic) return topic;
+
   const summary = cleanText(pick(fields, ["summary", "description", "overview"]));
   if (!summary) return "";
   const firstLine = summary
@@ -142,6 +156,14 @@ function deriveEventName(fields) {
     .find(Boolean);
   if (!firstLine) return "";
   return firstLine.replace(/^[^\p{L}\p{N}]+/u, "").trim() || firstLine;
+}
+
+function cleanTitleCandidate(value) {
+  const cleaned = cleanText(value);
+  if (!cleaned || /^n\/?a\b/i.test(cleaned) || /^tbd\b/i.test(cleaned)) return "";
+  const firstLine = cleaned.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "";
+  if (!firstLine || firstLine.length > 140) return "";
+  return firstLine;
 }
 
 function cleanText(value) {
