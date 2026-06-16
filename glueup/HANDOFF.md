@@ -6,9 +6,9 @@ The operator workflow is local and intentionally three-step:
 
 ```bash
 npm run ensure -- 6
-npm run populate -- --event 6
+npm run populate
 # human reviews and manually publishes in Glue Up
-npm run finalize -- --event 6 --confirm
+npm run finalize
 ```
 
 `ensure` treats GitHub Actions as the prepare backend, then uses the local saved Glue Up browser session to ensure the draft and campaign shells exist. `populate` updates those existing Glue Up objects. The script never publishes an event; publish remains a manual irreversible review step. `finalize` schedules campaign emails after publish.
@@ -162,22 +162,22 @@ The Glue Up workflow is split so existing drafts can be reused instead of rename
 
 ```bash
 npm run ensure -- 6                  # pull event data, ensure session, draft, and campaigns
-npm run populate -- --event 6        # update existing draft/campaigns
-npm run finalize -- --event 6 --confirm # post-publish scheduling
+npm run populate                     # update active draft/campaigns
+npm run finalize                     # post-publish scheduling
 ```
 
-With no args, `ensure` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. Use `--event` only when intentionally targeting an older prepared run.
+With no args, `ensure` pulls the most recent successful prepare run and infers the event from the artifact name (`glueup-run-evt-<year>-<NNN>`), so the index is never repeated locally. `ensure` writes the active run marker used by `populate` and `finalize`.
 
 Behavior:
 
-1. Resolves the run directory (pull-latest / `--event` / `--fresh` / `--run`).
+1. Resolves the run directory from the positional event index, latest prepared artifact, or active run marker.
 2. Reads `manifest.json`, `template-selection.json`, and `event.json`.
 3. Uses `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
-4. `ensure` reuses `manifest.glueUp.eventId` when present and template-compatible. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; pass `--poll-artifacts` to download recent successful prepare artifacts before scanning.
+4. `ensure` reuses `manifest.glueUp.eventId` when present and template-compatible. If there is no current event ID, it scans known `runs/*/manifest.json` records for a reusable draft with the same selected Glue Up `blueprintCode`; if none exists locally, it automatically downloads recent successful prepare artifacts before creating a new draft.
 5. `ensure` reuses existing campaign IDs by key and creates only missing week-before/day-before campaign shells.
 6. `populate` updates the existing draft's basic event settings through the settings page and applies the default recipients/setup/content payloads to existing campaign IDs.
 7. The human reviews and publishes manually in Glue Up.
-8. `finalize` posts `schedule-campaign` after publish and requires `--confirm`; use `--dry-run` to write `campaign-schedule-plan.json`.
+8. `finalize` posts `schedule-campaign` after publish; use `--dry-run` to write `campaign-schedule-plan.json`.
 
 `ensure` requires the `gh` CLI (authenticated) to pull artifacts.
 
@@ -193,7 +193,7 @@ Treat these as debug/support commands. The preferred operator path is `ensure`, 
 Dry run (no Glue Up auth required):
 
 ```bash
-npm run ensure -- --event 6 --dry-run
+npm run ensure -- 6 --dry-run
 ```
 
 This writes `draft-create-plan.json` with the blueprint and request shape that would be sent.

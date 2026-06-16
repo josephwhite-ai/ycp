@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
@@ -39,6 +39,7 @@ loadDotEnv();
 const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
 const ARTIFACT_PREFIX = "glueup-run-";
 const DEFAULT_REUSE_ARTIFACT_LIMIT = 20;
+const CURRENT_RUN_FILE = ".glueup-current-run";
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -172,6 +173,7 @@ async function validate(args) {
 
 async function ensureWorkflow(args) {
   const runDir = await prepareRunForDraft(args);
+  await writeCurrentRun(runDir);
   const auth = args.dryRun ? null : await ensureGlueUpAuth({ headless: !args.headed });
   if (auth) printAuthNote(auth);
 
@@ -187,16 +189,19 @@ async function ensureWorkflow(args) {
 
 async function populateWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
   await populateDraft({ ...args, run: runDir });
   await populateCampaigns({ ...args, run: runDir });
   const updated = await readJson(join(runDir, "manifest.json"));
   console.log(`\nGlue Up draft and campaigns are populated for ${runDir}.`);
   if (updated?.glueUp?.eventUrl) console.log(`Review event: ${updated.glueUp.eventUrl}`);
-  console.log("After manual review and publish in Glue Up, run: npm run finalize -- --event <index> --confirm");
+  console.log("After manual review and publish in Glue Up, run: npm run finalize");
 }
 
 async function finalizeWorkflow(args) {
-  await scheduleCampaigns(args);
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await scheduleCampaigns({ ...args, run: runDir });
 }
 
 async function ensureDraft(args, options = {}) {
@@ -224,8 +229,7 @@ async function ensureDraft(args, options = {}) {
     assertGlueUpTemplateCompatible({
       actual: manifest.glueUp,
       expected: selectedGlueUp,
-      source: join(runDir, "manifest.json"),
-      allowMismatch: args.allowTemplateMismatch
+      source: join(runDir, "manifest.json")
     });
     console.log(`Using existing Glue Up draft for ${runDir}`);
     console.log(`Event ID: ${manifest.glueUp.eventId}`);
@@ -234,45 +238,46 @@ async function ensureDraft(args, options = {}) {
     return;
   }
 
-  if (args.pollArtifacts) {
-    await syncRecentPreparedArtifacts({ limit: Number(args.reuseArtifactLimit || DEFAULT_REUSE_ARTIFACT_LIMIT) });
+  let reusable = await findReusableDraftForTemplate({ runDir, selectedGlueUp });
+  if (!reusable) {
+    await syncRecentPreparedArtifacts({
+      limit: DEFAULT_REUSE_ARTIFACT_LIMIT,
+      optional: true
+    });
+    reusable = await findReusableDraftForTemplate({ runDir, selectedGlueUp });
   }
-
-  if (!args.noReuse) {
-    const reusable = await findReusableDraftForTemplate({ runDir, selectedGlueUp });
-    if (reusable) {
-      if (args.dryRun) {
-        await writeJson(join(runDir, "draft-reuse-plan.json"), {
-          runDir,
-          reusableRunDir: reusable.runDir,
-          eventId: reusable.manifest.glueUp.eventId,
-          eventUrl: reusable.manifest.glueUp.eventUrl,
-          blueprintCode: selectedGlueUp.blueprintCode,
-          eventType: selectedGlueUp.eventType,
-          sourceStatus: reusable.manifest.status || null
-        });
-        console.log(`Wrote draft reuse plan to ${join(runDir, "draft-reuse-plan.json")}`);
-        if (options.returnManifest) return { runDir, manifest };
-        return;
-      }
-      manifest.glueUp = {
-        ...(manifest.glueUp || {}),
-        ...reusableGlueUpSnapshot(reusable.manifest.glueUp),
-        reusedFrom: {
-          runDir: reusable.runDir,
-          event: reusable.manifest.event || null,
-          status: reusable.manifest.status || null,
-          reusedAt: new Date().toISOString()
-        }
-      };
-      manifest.status = "draft_reused";
-      await writeJson(join(runDir, "manifest.json"), manifest);
-      console.log(`Reusing Glue Up draft from ${reusable.runDir} (${selectedGlueUp.blueprintCode})`);
-      console.log(`Event ID: ${manifest.glueUp.eventId}`);
-      if (manifest.glueUp.eventUrl) console.log(`Event URL: ${manifest.glueUp.eventUrl}`);
+  if (reusable) {
+    if (args.dryRun) {
+      await writeJson(join(runDir, "draft-reuse-plan.json"), {
+        runDir,
+        reusableRunDir: reusable.runDir,
+        eventId: reusable.manifest.glueUp.eventId,
+        eventUrl: reusable.manifest.glueUp.eventUrl,
+        blueprintCode: selectedGlueUp.blueprintCode,
+        eventType: selectedGlueUp.eventType,
+        sourceStatus: reusable.manifest.status || null
+      });
+      console.log(`Wrote draft reuse plan to ${join(runDir, "draft-reuse-plan.json")}`);
       if (options.returnManifest) return { runDir, manifest };
       return;
     }
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      ...reusableGlueUpSnapshot(reusable.manifest.glueUp),
+      reusedFrom: {
+        runDir: reusable.runDir,
+        event: reusable.manifest.event || null,
+        status: reusable.manifest.status || null,
+        reusedAt: new Date().toISOString()
+      }
+    };
+    manifest.status = "draft_reused";
+    await writeJson(join(runDir, "manifest.json"), manifest);
+    console.log(`Reusing Glue Up draft from ${reusable.runDir} (${selectedGlueUp.blueprintCode})`);
+    console.log(`Event ID: ${manifest.glueUp.eventId}`);
+    if (manifest.glueUp.eventUrl) console.log(`Event URL: ${manifest.glueUp.eventUrl}`);
+    if (options.returnManifest) return { runDir, manifest };
+    return;
   }
 
   if (args.dryRun) {
@@ -463,10 +468,6 @@ async function scheduleCampaigns(args) {
   const campaigns = allCampaigns.filter((campaign) => campaign.campaignId);
   if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId.`);
   if (!campaigns.length) throw new Error(`${join(runDir, "manifest.json")} has no campaign IDs to schedule.`);
-  if (!args.confirm && !args.dryRun) {
-    throw new Error("Scheduling can send real campaign emails. Re-run with --confirm after the event is published.");
-  }
-
   const config = getConfig({ timezone: args.timezone });
   const schedule = buildCampaignSchedule(event.eventDate, config.timezone);
   if (!schedule) throw new Error(`Could not calculate campaign schedule from eventDate "${event.eventDate}".`);
@@ -792,15 +793,14 @@ function reusableGlueUpSnapshot(glueUp = {}) {
   };
 }
 
-function assertGlueUpTemplateCompatible({ actual, expected, source, allowMismatch = false }) {
-  if (allowMismatch) return;
+function assertGlueUpTemplateCompatible({ actual, expected, source }) {
   if (!actual?.blueprintCode) {
     console.log(`Warning: ${source} has a Glue Up event ID but no blueprintCode; template compatibility cannot be verified.`);
     return;
   }
   if (!glueUpTemplateMatches(actual, expected)) {
     throw new Error(
-      `${source} already points at Glue Up event ${actual.eventId}, but its template is ${actual.blueprintCode}/${actual.eventType || "unknown"} and this run selected ${expected.blueprintCode}/${expected.eventType}. Pass --allow-template-mismatch only if you intentionally want to reuse it.`
+      `${source} already points at Glue Up event ${actual.eventId}, but its template is ${actual.blueprintCode}/${actual.eventType || "unknown"} and this run selected ${expected.blueprintCode}/${expected.eventType}. Use a template-compatible draft or create a fresh run manifest.`
     );
   }
 }
@@ -812,37 +812,42 @@ function glueUpTemplateMatches(actual, expected) {
   return true;
 }
 
-async function syncRecentPreparedArtifacts({ limit }) {
-  const runs = JSON.parse(
-    ghCapture([
-      "run",
-      "list",
-      "--workflow",
-      PREPARE_WORKFLOW,
-      "--status",
-      "success",
-      "--limit",
-      String(limit),
-      "--json",
-      "databaseId"
-    ])
-  );
-
-  for (const run of runs) {
-    const artifacts = JSON.parse(
+async function syncRecentPreparedArtifacts({ limit, optional = false }) {
+  try {
+    const runs = JSON.parse(
       ghCapture([
-        "api",
-        `repos/{owner}/{repo}/actions/runs/${run.databaseId}/artifacts`,
-        "--jq",
-        ".artifacts"
+        "run",
+        "list",
+        "--workflow",
+        PREPARE_WORKFLOW,
+        "--status",
+        "success",
+        "--limit",
+        String(limit),
+        "--json",
+        "databaseId"
       ])
     );
-    for (const artifact of artifacts.filter((item) => item.name.startsWith(ARTIFACT_PREFIX))) {
-      const slug = artifact.name.slice(ARTIFACT_PREFIX.length);
-      if (existsSync(join("runs", slug, "manifest.json"))) continue;
-      console.log(`Downloading reusable draft artifact ${artifact.name} from run #${run.databaseId} ...`);
-      gh(["run", "download", String(run.databaseId), "-n", artifact.name, "-D", "runs"]);
+
+    for (const run of runs) {
+      const artifacts = JSON.parse(
+        ghCapture([
+          "api",
+          `repos/{owner}/{repo}/actions/runs/${run.databaseId}/artifacts`,
+          "--jq",
+          ".artifacts"
+        ])
+      );
+      for (const artifact of artifacts.filter((item) => item.name.startsWith(ARTIFACT_PREFIX))) {
+        const slug = artifact.name.slice(ARTIFACT_PREFIX.length);
+        if (existsSync(join("runs", slug, "manifest.json"))) continue;
+        console.log(`Downloading reusable draft artifact ${artifact.name} from run #${run.databaseId} ...`);
+        gh(["run", "download", String(run.databaseId), "-n", artifact.name, "-D", "runs"]);
+      }
     }
+  } catch (error) {
+    if (!optional) throw error;
+    console.log(`Could not refresh recent artifacts automatically: ${error.message}`);
   }
 }
 
@@ -1013,7 +1018,19 @@ function resolveRunDir(args) {
     const eventInfo = parseEvent(args);
     return join("runs", eventInfo.slug);
   }
-  throw new Error("Missing run target. Example: npm run apply-campaign-setup -- --event 6");
+  const current = readCurrentRun();
+  if (current) return current;
+  throw new Error("Missing run target. Run `npm run ensure -- <event-index>` first.");
+}
+
+function readCurrentRun() {
+  if (!existsSync(CURRENT_RUN_FILE)) return null;
+  const value = readFileSync(CURRENT_RUN_FILE, "utf8").trim();
+  return value || null;
+}
+
+async function writeCurrentRun(runDir) {
+  await writeFile(CURRENT_RUN_FILE, `${runDir}\n`, "utf8");
 }
 
 async function writeJson(path, value) {
@@ -1037,9 +1054,9 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
-  npm run ensure -- 6                  # pull event data, ensure Glue Up session, draft, and campaigns
-  npm run populate -- --event 6        # populate the existing draft and campaigns
-  npm run finalize -- --event 6 --confirm # schedule campaigns after manual review and publish
+  npm run ensure -- 6      # pull event data, ensure Glue Up session, draft, and campaigns
+  npm run populate         # populate the active draft and campaigns
+  npm run finalize         # schedule campaigns after manual review and publish
 
 Support/debug commands:
   npm run sync-run -- --event 6 [--fresh] # pre-stage an artifact only
@@ -1050,20 +1067,8 @@ Support/debug commands:
   npm run mark-ignore -- --event 6 --headed
 
 Options:
-  --event N          Event index (counter unique across the year)
-  --year YYYY        Defaults to the current year
-  --run path
-  --events-folder-id id
-  --timezone America/New_York
-  --dry-run
-  --fresh            Dispatch the prepare workflow and wait for it before downloading
-  --headed           Open a visible browser for Glue Up session/page mutations
-  --probe path        Defaults to .glueup-debug/campaign-probe.json for apply-campaign-setup
-  --title text        Defaults to PLEASE IGNORE for mark-ignore
-  --confirm           Required for finalize unless --dry-run is set
-  --poll-artifacts    Download recent prepare artifacts before looking for a reusable draft
-  --reuse-artifact-limit N
-  --no-reuse          Force ensure to create a new draft when manifest has no event ID
-  --allow-template-mismatch
+  --year YYYY        Defaults to the current year for ensure
+  --dry-run          Write a plan without mutating Glue Up
+  --headed           Open a visible browser for Glue Up page mutations
 `);
 }
