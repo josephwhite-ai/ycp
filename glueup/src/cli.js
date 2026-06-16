@@ -519,6 +519,11 @@ async function scheduleCampaigns(args) {
 
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   printAuthNote(auth);
+  await assertGlueUpEventIsPublished({
+    eventId,
+    cookie: auth.cookie,
+    source: join(runDir, "manifest.json")
+  });
   for (const item of scheduled) {
     await scheduleCampaign({
       eventId,
@@ -539,9 +544,11 @@ async function scheduleCampaigns(args) {
   manifest.status = "campaigns_scheduled";
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
+    publishedAt: manifest.glueUp?.publishedAt || new Date().toISOString(),
     campaigns: campaigns.length === allCampaigns.length ? campaigns : allCampaigns
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
+  console.log(`\nScheduled ${scheduled.length} campaign(s) for ${runDir}.`);
 }
 
 async function applyCapturedCampaignSetup(args) {
@@ -841,6 +848,18 @@ async function assertGlueUpEventIsDraft({ eventId, cookie, source }) {
   if (!confirmed) {
     throw new Error(
       `${source} points at Glue Up event ${eventId}, but Glue Up does not confirm that event is still a draft. Refusing to repurpose a possibly published event.`
+    );
+  }
+}
+
+// Scheduling is hard-gated by Glue Up: on an unpublished event the admin UI
+// pops "Please publish your event" and blocks the send. Fail fast with a clear
+// message rather than letting each schedule-campaign call error mid-loop.
+async function assertGlueUpEventIsPublished({ eventId, cookie, source }) {
+  const stillDraft = await glueUpConfirmsDraft(eventId, { cookie });
+  if (stillDraft) {
+    throw new Error(
+      `${source} points at Glue Up event ${eventId}, which is still a draft. Publish the event in Glue Up after reviewing it, then re-run finalize. Scheduling is blocked until the event is published.`
     );
   }
 }
