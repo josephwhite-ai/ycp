@@ -8,6 +8,7 @@
     "validate": "node src/cli.js validate",
     "create-draft": "node src/cli.js create-draft",
     "apply-campaign-setup": "node src/cli.js apply-campaign-setup",
+    "mark-ignore": "node src/cli.js mark-ignore",
     "sync-run": "node src/cli.js sync-run",
     "glueup-login": "node src/cli.js glueup-login",
     "probe-campaign": "node scripts/probe-campaign.mjs",

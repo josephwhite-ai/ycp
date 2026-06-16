@@ -87,6 +87,7 @@ The standalone steps are still available if you want to pre-stage or refresh aut
 
 ```bash
 npm run sync-run -- --event 6   # download the artifact only
+npm run mark-ignore -- --event 6 --headed # mark a junk draft and its campaigns as PLEASE IGNORE
 npm run glueup-login            # refresh the saved browser session only
 ```
 
