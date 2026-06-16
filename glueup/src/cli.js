@@ -48,20 +48,12 @@ try {
     await prepare(args);
   } else if (command === "validate") {
     await validate(args);
-  } else if (command === "create-draft") {
-    await createDraftWorkflow(args);
-  } else if (command === "ensure-draft") {
-    await ensureDraft(args);
-  } else if (command === "ensure-campaigns") {
-    await ensureCampaigns(args);
-  } else if (command === "populate-draft") {
-    await populateDraft(args);
-  } else if (command === "populate-campaigns") {
-    await populateCampaigns(args);
-  } else if (command === "publish-draft") {
-    await publishDraft(args);
-  } else if (command === "schedule-campaigns") {
-    await scheduleCampaigns(args);
+  } else if (command === "ensure") {
+    await ensureWorkflow(args);
+  } else if (command === "populate") {
+    await populateWorkflow(args);
+  } else if (command === "finalize") {
+    await finalizeWorkflow(args);
   } else if (command === "apply-campaign-setup") {
     await applyCapturedCampaignSetup(args);
   } else if (command === "mark-ignore") {
@@ -178,16 +170,33 @@ async function validate(args) {
   if (!validation.ok) process.exitCode = 1;
 }
 
-async function createDraftWorkflow(args) {
-  const ensured = await ensureDraft(args, { returnManifest: true });
+async function ensureWorkflow(args) {
+  const runDir = await prepareRunForDraft(args);
+  const auth = args.dryRun ? null : await ensureGlueUpAuth({ headless: !args.headed });
+  if (auth) printAuthNote(auth);
+
+  const ensured = await ensureDraft({ ...args, run: runDir }, { returnManifest: true, auth });
   if (args.dryRun) return;
-  const { runDir } = ensured;
-  await ensureCampaigns({ ...args, run: runDir });
+
+  await ensureCampaigns({ ...args, run: ensured.runDir }, { auth });
+  const updated = await readJson(join(ensured.runDir, "manifest.json"));
+  console.log(`\nGlue Up shells are ensured for ${ensured.runDir}.`);
+  if (updated?.glueUp?.eventUrl) console.log(`Event URL: ${updated.glueUp.eventUrl}`);
+  console.log("Next: npm run populate");
+}
+
+async function populateWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await populateDraft({ ...args, run: runDir });
   await populateCampaigns({ ...args, run: runDir });
   const updated = await readJson(join(runDir, "manifest.json"));
-  console.log(`\nPre-publish Glue Up objects are ready for ${runDir}.`);
-  if (updated?.glueUp?.eventUrl) console.log(`Event URL: ${updated.glueUp.eventUrl}`);
-  console.log(`Review the event and campaigns, then publish the event in Glue Up to enable scheduling.`);
+  console.log(`\nGlue Up draft and campaigns are populated for ${runDir}.`);
+  if (updated?.glueUp?.eventUrl) console.log(`Review event: ${updated.glueUp.eventUrl}`);
+  console.log("After manual review and publish in Glue Up, run: npm run finalize -- --event <index> --confirm");
+}
+
+async function finalizeWorkflow(args) {
+  await scheduleCampaigns(args);
 }
 
 async function ensureDraft(args, options = {}) {
@@ -293,13 +302,8 @@ async function ensureDraft(args, options = {}) {
     return;
   }
 
-  const auth = await ensureGlueUpAuth({ headless: !args.headed });
-  const authNotes = {
-    env: "Using GLUEUP_COOKIE/CSRF from the environment.",
-    session: "Using saved Glue Up session.",
-    login: "Logged in to Glue Up."
-  };
-  if (authNotes[auth.source]) console.log(authNotes[auth.source]);
+  const auth = options.auth || (await ensureGlueUpAuth({ headless: !args.headed }));
+  if (!options.auth) printAuthNote(auth);
 
   const result = await createDraftFromBlueprint({
     templateSelection,
@@ -353,11 +357,11 @@ async function createInvitationCampaigns({ eventId, event, cookie, orgId, plan =
   return results;
 }
 
-async function ensureCampaigns(args) {
+async function ensureCampaigns(args, options = {}) {
   const runDir = resolveRunDir(args);
   const [manifest, rawEvent] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
   const eventId = manifest?.glueUp?.eventId;
-  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure-draft first.`);
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
 
   const existingCampaigns = Array.isArray(manifest?.glueUp?.campaigns) ? manifest.glueUp.campaigns : [];
   const existingByKey = new Map(
@@ -369,8 +373,8 @@ async function ensureCampaigns(args) {
     return;
   }
 
-  const auth = await ensureGlueUpAuth({ headless: !args.headed });
-  printAuthNote(auth);
+  const auth = options.auth || (await ensureGlueUpAuth({ headless: !args.headed }));
+  if (!options.auth) printAuthNote(auth);
   const event = normalizeEventFields(rawEvent);
   const created = await createInvitationCampaigns({
     eventId,
@@ -396,7 +400,7 @@ async function populateDraft(args) {
   const runDir = resolveRunDir(args);
   const [manifest, rawEvent] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
   const eventId = manifest?.glueUp?.eventId;
-  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure-draft first.`);
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
 
   const event = normalizeEventFields(rawEvent);
   await populateEventSettingsViaSettingsPage({
@@ -420,8 +424,8 @@ async function populateCampaigns(args) {
   const eventId = manifest?.glueUp?.eventId;
   const campaigns = manifest?.glueUp?.campaigns || [];
   const targetCampaigns = campaigns.filter((campaign) => campaign.campaignId);
-  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure-draft first.`);
-  if (!targetCampaigns.length) throw new Error(`${join(runDir, "manifest.json")} has no campaign IDs. Run ensure-campaigns first.`);
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+  if (!targetCampaigns.length) throw new Error(`${join(runDir, "manifest.json")} has no campaign IDs. Run ensure first.`);
 
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   printAuthNote(auth);
@@ -449,12 +453,6 @@ async function populateCampaigns(args) {
     campaigns: targetCampaigns.length === campaigns.length ? targetCampaigns : campaigns
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
-}
-
-async function publishDraft() {
-  throw new Error(
-    "publish-draft is intentionally not wired yet: the Glue Up publish request has not been captured and publishing is irreversible. Publish manually in Glue Up for now, then run schedule-campaigns."
-  );
 }
 
 async function scheduleCampaigns(args) {
@@ -857,7 +855,7 @@ async function glueupLogin(args) {
 async function syncRun(args) {
   const eventInfo = parseEvent(args);
   await syncEvent(eventInfo, { fresh: args.fresh });
-  console.log("Next: npm run create-draft");
+  console.log("Next: npm run ensure");
 }
 
 async function syncEvent(eventInfo, { fresh = false } = {}) {
@@ -880,7 +878,7 @@ async function syncEvent(eventInfo, { fresh = false } = {}) {
 
 // Pull the most recent successful prepare run and infer which event it is from
 // the artifact name (glueup-run-evt-<year>-<index>). This is the default path
-// for create-draft: the index is named once, on GitHub, not again locally.
+// for ensure: the index is named once, on GitHub, not again locally.
 async function syncLatestEvent() {
   const runs = JSON.parse(
     ghCapture([
@@ -898,7 +896,7 @@ async function syncLatestEvent() {
   );
   if (!runs.length) {
     throw new Error(
-      `No successful ${PREPARE_WORKFLOW} run found. Dispatch one with: npm run create-draft -- <index>`
+      `No successful ${PREPARE_WORKFLOW} run found. Dispatch one with: npm run ensure -- <index>`
     );
   }
 
@@ -981,9 +979,9 @@ function ghCapture(argv) {
   return execFileSync("gh", argv, { encoding: "utf8" });
 }
 
-// Resolve the run for create-draft. The normal shorthand is positional:
-// `npm run create-draft -- 6`, which dispatches a fresh prepare and creates the
-// draft. With no flags it pulls the latest successful prepare run from CI.
+// Resolve the run for ensure. The normal shorthand is positional:
+// `npm run ensure -- 6`, which dispatches a fresh prepare and ensures Glue Up
+// shells. With no flags it pulls the latest successful prepare run from CI.
 // --event N targets a specific older event; --run path uses a local run as-is.
 async function prepareRunForDraft(args) {
   if (args.run) return args.run;
@@ -1028,7 +1026,7 @@ async function readJson(path) {
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new Error(
-        `Missing run file "${path}". Use the local entrypoint to prepare and create in one flow:\n  npm run create-draft -- 6\nFor debugging only, you can pre-stage an artifact with:\n  npm run sync-run -- --event 6 --fresh`
+        `Missing run file "${path}". Use the local ensure step first:\n  npm run ensure -- 6\nFor debugging only, you can pre-stage an artifact with:\n  npm run sync-run -- --event 6 --fresh`
       );
     }
     throw error;
@@ -1039,24 +1037,17 @@ function usage() {
   console.log(`Glue Up Agent
 
 Usage:
-  npm run ensure-draft -- 6                  # create a Glue Up draft only if this run has no event ID
-  npm run ensure-campaigns -- --event 6      # create missing campaign shells only
-  npm run populate-draft -- --event 6        # update an existing draft's basic event settings
-  npm run populate-campaigns -- --event 6    # apply recipients/setup/content to existing campaigns
-  npm run publish-draft -- --event 6         # placeholder until the publish request is captured
-  npm run schedule-campaigns -- --event 6 --confirm
-
-Compatibility:
-  npm run create-draft -- 6                  # ensure draft + ensure campaigns + populate campaigns
-  npm run create-draft                       # pull latest prepared event from CI, then run compatibility flow
-  npm run apply-campaign-setup -- --event 6  # replay captured recipient/setup/content payloads
-  npm run mark-ignore -- --event 6 --headed  # rename a junk draft/campaigns to PLEASE IGNORE
+  npm run ensure -- 6                  # pull event data, ensure Glue Up session, draft, and campaigns
+  npm run populate -- --event 6        # populate the existing draft and campaigns
+  npm run finalize -- --event 6 --confirm # schedule campaigns after manual review and publish
 
 Support/debug commands:
-  npm run sync-run -- --event 6 [--fresh]   # pre-stage an artifact only
-  npm run glueup-login                      # refresh the saved browser session only
-  npm run monthly-prepare -- --event 6      # CI prepare backend; usually dispatched by ensure-draft --fresh
+  npm run sync-run -- --event 6 [--fresh] # pre-stage an artifact only
+  npm run glueup-login                    # refresh the saved browser session only
+  npm run monthly-prepare -- --event 6    # CI prepare backend; usually dispatched by ensure --fresh
   npm run validate -- --run runs/evt-2026-006
+  npm run apply-campaign-setup -- --event 6
+  npm run mark-ignore -- --event 6 --headed
 
 Options:
   --event N          Event index (counter unique across the year)
@@ -1069,10 +1060,10 @@ Options:
   --headed           Open a visible browser for Glue Up session/page mutations
   --probe path        Defaults to .glueup-debug/campaign-probe.json for apply-campaign-setup
   --title text        Defaults to PLEASE IGNORE for mark-ignore
-  --confirm           Required for schedule-campaigns unless --dry-run is set
+  --confirm           Required for finalize unless --dry-run is set
   --poll-artifacts    Download recent prepare artifacts before looking for a reusable draft
   --reuse-artifact-limit N
-  --no-reuse          Force ensure-draft to create a new draft when manifest has no event ID
+  --no-reuse          Force ensure to create a new draft when manifest has no event ID
   --allow-template-mismatch
 `);
 }

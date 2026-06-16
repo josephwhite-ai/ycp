@@ -4,21 +4,21 @@ Automation for preparing Glue Up event-page inputs from Google Drive event data,
 
 ## Operator workflow
 
-For normal use, treat Glue Up objects as reusable shells and run the local steps from this directory:
+For normal use, run three local steps from this directory:
 
 ```bash
-npm run ensure-draft -- 6
-npm run ensure-campaigns -- --event 6
-npm run populate-draft -- --event 6
-npm run populate-campaigns -- --event 6
+npm run ensure -- 6
+npm run populate -- --event 6
+# review and manually publish in Glue Up
+npm run finalize -- --event 6 --confirm
 ```
 
-`ensure-*` commands create only what is missing. If `manifest.json` already points at an existing Glue Up draft or campaign, the command reuses it; if not, `ensure-draft` first looks through known run artifacts for an existing draft with the same selected Glue Up blueprint. `populate-*` commands update the existing objects with the current run data. The event index is the leading number in a Drive folder like `06 - June 2026 - NHH`.
+`ensure` pulls event data, ensures the local Glue Up session, ensures a template-compatible draft exists, and ensures campaign shells exist. `populate` updates the existing draft and campaigns from the parsed Google Drive data. `finalize` schedules campaign emails after a human has reviewed and manually published the event in Glue Up. The script never publishes events.
 
 If the prepare workflow was already run successfully, you can let the local command pull the latest prepared event:
 
 ```bash
-npm run ensure-draft
+npm run ensure
 ```
 
 The GitHub Actions workflow is the prepare backend, not a separate end-user workflow. Glue Up mutation stays local because Glue Up login is behind Cloudflare and requires a browser-backed session.
@@ -35,9 +35,10 @@ The current implementation:
 6. Lists likely photo assets.
 7. Generates local event-template field briefs and campaign-template fill briefs.
 8. Writes a validation report.
-9. Ensures a Glue Up event draft exists from the selected approved blueprint.
+9. Ensures a Glue Up event draft exists from the selected approved blueprint or from a reusable template-compatible draft.
 10. Ensures two invitation campaign drafts exist, one for the week-before send and one for the day-before send.
 11. Populates the existing draft and campaign records for the current month.
+12. Schedules campaign emails after manual review and manual publish.
 
 The agent should not design new event pages or email campaigns from scratch. Glue Up is treated as the source of approved event and campaign templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
 
@@ -67,25 +68,25 @@ Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls w
 
 Each run targets one event, identified by its index — a counter unique across the year (the leading number in a folder like `06 - June 2026 - NHH`). The year defaults to the current year.
 
-Content prep (Google Drive parsing) runs in GitHub Actions; Glue Up mutation runs locally because Glue Up's login is behind Cloudflare. `ensure-draft` bridges the CI prepare half and local mutation: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and creates a draft only when the manifest does not already have one.
+Content prep (Google Drive parsing) runs in GitHub Actions; Glue Up mutation runs locally because Glue Up's login is behind Cloudflare. `ensure` bridges the CI prepare half and local mutation: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and creates or reuses Glue Up shells only when the manifest does not already have them.
 
-The pre-publish flow is now split so existing drafts can be repurposed instead of marked `PLEASE IGNORE`: `ensure-draft`, `ensure-campaigns`, `populate-draft`, and `populate-campaigns`. Draft reuse respects the selected template by matching `template-selection.selected.glueUp.blueprintCode` against prior manifests; pass `--poll-artifacts` if local `runs/` may not include the older artifacts yet. You then review the event and both campaigns together and publish the event in Glue Up — a deliberate manual step, since publishing is effectively irreversible. Scheduling is gated on publish and runs with `schedule-campaigns --confirm`.
+The pre-publish flow is split so existing drafts can be repurposed instead of marked `PLEASE IGNORE`: `ensure` finds or creates the shells, and `populate` updates them. Draft reuse respects the selected template by matching `template-selection.selected.glueUp.blueprintCode` against prior manifests; pass `--poll-artifacts` if local `runs/` may not include the older artifacts yet. You then review the event and both campaigns together and publish the event manually in Glue Up. Scheduling is gated on publish and runs with `finalize --confirm`.
 
-With no arguments, `ensure-draft` pulls the **latest successful prepare run** from CI and infers which event it is from the artifact name — so the event index is named once, on GitHub, and never repeated locally:
+With no arguments, `ensure` pulls the **latest successful prepare run** from CI and infers which event it is from the artifact name — so the event index is named once, on GitHub, and never repeated locally:
 
 ```bash
-npm run ensure-draft                      # latest prepared event + login if needed + ensure draft
+npm run ensure                      # latest prepared event + login if needed + ensure shells
 ```
 
 Name an index positionally for the normal fresh path.
 
 ```bash
-npm run ensure-draft -- 6                  # normal path: fresh prepare + ensure draft
-npm run ensure-draft -- --event 6         # target a specific older event
-npm run ensure-draft -- --event 6 --fresh # dispatch a new prepare, wait, then ensure the draft
+npm run ensure -- 6                  # normal path: fresh prepare + ensure shells
+npm run ensure -- --event 6         # target a specific older event
+npm run ensure -- --event 6 --fresh # dispatch a new prepare, wait, then ensure shells
 ```
 
-`ensure-draft` requires the `gh` CLI (authenticated) to pull the artifact. Auth resolves in this order: `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment, then a still-valid saved session under `.glueup-session/` (probed headlessly), then a headed login. The saved session is reused across events, so the browser rarely opens.
+`ensure` requires the `gh` CLI (authenticated) to pull the artifact. Auth resolves in this order: `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment, then a still-valid saved session under `.glueup-session/` (probed headlessly), then a headed login. The saved session is reused across events, so the browser rarely opens.
 
 The standalone steps are still available if you want to pre-stage or refresh auth separately:
 
@@ -93,7 +94,6 @@ The standalone steps are still available if you want to pre-stage or refresh aut
 npm run sync-run -- --event 6   # download the artifact only
 npm run mark-ignore -- --event 6 --headed # mark a junk draft and its campaigns as PLEASE IGNORE
 npm run glueup-login            # refresh the saved browser session only
-npm run create-draft -- 6       # compatibility wrapper for ensure draft/campaigns + populate campaigns
 ```
 
 Manual env override still works:
@@ -148,8 +148,9 @@ You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallba
 ## Commands
 
 ```bash
-npm run create-draft -- 6
-npm run create-draft
+npm run ensure -- 6
+npm run populate -- --event 6
+npm run finalize -- --event 6 --confirm
 npm run glueup-login
 npm run check
 ```
@@ -171,13 +172,13 @@ Year folders contain event folders named like `06 - June 2026 - NHH`: event inde
 
 ## Deployment Model
 
-Use the local ensure/populate commands as the normal mutation path. They treat GitHub Actions as a remote prepare worker, then perform Glue Up mutations locally with the saved browser session. This keeps the Google Drive service-account work reproducible in CI while avoiding a brittle second Glue Up login path in the cloud.
+Use `ensure`, `populate`, and `finalize` as the normal mutation path. They treat GitHub Actions as a remote prepare worker, then perform Glue Up mutations locally with the saved browser session. This keeps the Google Drive service-account work reproducible in CI while avoiding a brittle second Glue Up login path in the cloud.
 
 If the local browser requirement becomes painful later, the next deployment target should be a small always-on browser runner with a persisted session, not a second public GitHub Actions mutation workflow.
 
 ## GitHub Actions setup
 
-The included workflow is `.github/workflows/glueup-monthly-prepare.yml`, run on demand via `workflow_dispatch` (inputs: `event`, optional `year`). `ensure-draft --fresh`, `create-draft --fresh`, and `sync-run --fresh` dispatch it for you.
+The included workflow is `.github/workflows/glueup-monthly-prepare.yml`, run on demand via `workflow_dispatch` (inputs: `event`, optional `year`). `ensure --fresh` and `sync-run --fresh` dispatch it for you.
 
 Add these repository secrets/variables:
 
