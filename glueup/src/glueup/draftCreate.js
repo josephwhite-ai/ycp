@@ -8,7 +8,7 @@ function toAbsoluteUrl(value) {
   return `${DEFAULT_BASE_URL}/${value}`;
 }
 
-function assertNoAppError(response, action) {
+export function assertNoAppError(response, action) {
   if (!response || typeof response !== "object") {
     throw new Error(`Glue Up ${action} returned an unexpected response.`);
   }
