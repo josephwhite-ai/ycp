@@ -60,13 +60,40 @@ Copied cookies/tokens from browser devtools are examples only. Treat them like p
 - `src/glueup/draftCreate.js`
   - Creates an event draft from a blueprint through `/events/draft/create/ajax`.
 - `src/glueup/campaignCreate.js`
-  - Creates a campaign draft through `/crm/people/ajax` with action `AddCampaign` and campaign type `EventInvitationCampaign`.
+  - `addCampaign` creates an invitation campaign draft through `/crm/people/ajax` action `AddCampaign`, and `parseAddCampaignResult` reads the new campaign ID out of the response redirect. `fetchCampaignCsrfToken` pulls a fresh per-page CSRF token.
 
-`draftCreate.js` is fully wired into the CLI and runs the live 3-step create flow. `campaignCreate.js` still builds the request shape only and needs a CLI command.
+`draftCreate.js` and `campaignCreate.js` are both wired into the CLI. `create-draft` now creates the event draft **and** two invitation campaign drafts (week-before, day-before), recording their IDs in `manifest.glueUp.campaigns`. Scheduling is the remaining gap (see below).
+
+## Campaign flow — reverse-engineered via probe (2026-06-15)
+
+`scripts/probe-campaign.mjs` (`npm run probe-campaign`) is a headed Playwright probe that records campaign AJAX **value-free** and **aborts** any action matching `send|schedule|dispatch|deliver|publish|remind` before it reaches Glue Up, so the destructive `schedule-campaign` request can be captured without firing. Reports stream to `.glueup-debug/campaign-probe.json` (gitignored). Probe only against a known test event; never let a real send through.
+
+The admin UI's campaign wizard, as captured, is:
+
+1. **`AddCampaign`** → POST `/crm/people/ajax`
+   - data: `{ id: null, eventId: "<id>" (plain string), campaignType: "EventInvitationCampaign", title }`
+   - response `redirect` = `/events/<eventId>/promote/campaigns/<campaignId>/` — **the only place the new campaign ID appears.**
+   - NOTE: a `RegularEventCampaign` (the wrong type, from a mis-click on a past event) sent `campaignType: "RegularEventCampaign"`; an invitation campaign on a draft event sent NO `campaignType` field. `campaignCreate.js` sends `EventInvitationCampaign` explicitly as a plain string. Verify this is honored on the first live run.
+2. **`recipientFiltersStandardFormSubmit`** → POST `/events/<eventId>/promote/campaigns/<campaignId>/ajax` — recipient audience (booleans per member/attendee/subscriber list).
+3. **`negativeFiltersStandardFormSubmit`** → same URL — exclusion audience.
+4. **`SetupCampaignFormSubmit`** → same URL — `{ setup.senderEmail.code, subject, preheader, language.code:"en", campaignName, ... }`.
+5. **`ContentFormSubmit`** (fires twice) → same URL — email body `blocks` (array; modules like `organizationLogo`, `detailsHeader`).
+6. **`schedule-campaign`** → same URL — `{ id: null, isNotificationEnabled, timezone.code: "America/New_York", sendTime: "HH:mm" (e.g. "04:00"), sendDate: "YYYY-MM-DD" }`. **This is the step we never let through.**
+
+### Publish gate (confirmed)
+
+CREATING an invitation campaign draft works on an UNPUBLISHED event. SCHEDULING/sending is hard-gated: on an unpublished event Glue Up pops "Please publish your event" and blocks the send. So the publish gate sits **between create and schedule**, not before create — which is why `create-draft` stages event + campaign drafts pre-publish, and scheduling must be a separate post-publish step. Also: `EventInvitationCampaign` is only OFFERED as a type on upcoming events (a past event only offers `RegularEventCampaign`).
+
+### Open question for whoever wires Setup/Content + scheduling
+
+It is UNVERIFIED whether `AddCampaign` alone yields a complete, reviewable invitation campaign (content pre-filled from the event's invitation template) or a bare shell needing steps 2–5. Evidence leans toward content attaching at `AddCampaign`: the step-4/5 *responses* already contained `data.value.blocks` (the template modules), and `AddCampaign` ran before them — suggesting steps 4–5 just re-save existing server-side state. **First action for the next session: run `create-draft` against a fresh draft event and inspect the two campaigns in the Glue Up UI.**
+- If complete → nothing more to do on content; only scheduling remains.
+- If empty shells → steps 2–5 must be replayed. BUT the probe is value-free, so the actual `subject` / email-body `blocks` were NOT captured (only types/lengths). Replaying with partial data would clobber template content. To get real payloads, either (a) re-probe with value capture enabled for these non-secret fields into a gitignored file, or (b) find the GET that returns the campaign's prefilled state after `AddCampaign` and echo it back.
 
 ## Recommended Next Step
 
-Wire campaign creation into a CLI command that reuses the Playwright session layer and the existing `campaignCreate.js` helper.
+1. Validate whether `AddCampaign` alone produces complete campaigns (above).
+2. Add a post-publish `schedule-campaigns` CLI command: read `manifest.glueUp.campaigns` + the final published event date, then POST `schedule-campaign` for each at `sendTime: "04:00"` on the week-before / day-before `sendDate`. Reuse `fetchCampaignCsrfToken` and the `assertNoAppError` error handling. The schedule-campaign success/error response shape is unknown (never let through) — capture it on the first real run, and detect the "please publish" gate to fail gracefully if the event isn't published.
 
 ## Playwright Session Auth
 
@@ -103,8 +130,9 @@ Behavior:
 2. Reads `manifest.json`, `template-selection.json`, and `event.json`.
 3. Uses `template-selection.selected.glueUp.eventType` and `.blueprintCode`.
 4. Runs AddEvent → blueprintSubmit → EventSessionSubmit, populating title, start/end date+time, and venue from `event.json`.
-5. Persists the Glue Up event ID/URL into `manifest.json` under `glueUp` and writes the raw response to `draft-create-response.json`.
-6. Does not create campaigns yet.
+5. Creates two invitation campaign drafts (week-before, day-before) on the new event via `addCampaign`; failures are captured per-campaign so they don't lose the event.
+6. Persists the event ID/URL and `glueUp.campaigns` (each `{ key, label, title, campaignId, campaignUrl }`) into `manifest.json`, and writes the raw event response to `draft-create-response.json`.
+7. Does NOT schedule the campaigns — that is the post-publish step (see "Campaign flow" above).
 
 `create-draft` requires the `gh` CLI (authenticated) to pull artifacts.
 
