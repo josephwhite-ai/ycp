@@ -4,6 +4,7 @@ credentials/
 *.log
 glueup/runs/*
 !glueup/runs/.gitkeep
+glueup/.glueup-current-run
 glueup/.glueup-session/
 glueup/.glueup-debug/
 __pycache__/

@@ -8,9 +8,9 @@ For normal use, run three local steps from this directory:
 
 ```bash
 npm run ensure -- 6
-npm run populate -- --event 6
+npm run populate
 # review and manually publish in Glue Up
-npm run finalize -- --event 6 --confirm
+npm run finalize
 ```
 
 `ensure` pulls event data, ensures the local Glue Up session, ensures a template-compatible draft exists, and ensures campaign shells exist. `populate` updates the existing draft and campaigns from the parsed Google Drive data. `finalize` schedules campaign emails after a human has reviewed and manually published the event in Glue Up. The script never publishes events.
@@ -70,7 +70,7 @@ Each run targets one event, identified by its index — a counter unique across 
 
 Content prep (Google Drive parsing) runs in GitHub Actions; Glue Up mutation runs locally because Glue Up's login is behind Cloudflare. `ensure` bridges the CI prepare half and local mutation: it pulls the prepared run artifact from CI, ensures a Glue Up session (opening a visible browser to log in **only** when the saved session is missing or expired), and creates or reuses Glue Up shells only when the manifest does not already have them.
 
-The pre-publish flow is split so existing drafts can be repurposed instead of marked `PLEASE IGNORE`: `ensure` finds or creates the shells, and `populate` updates them. Draft reuse respects the selected template by matching `template-selection.selected.glueUp.blueprintCode` against prior manifests; pass `--poll-artifacts` if local `runs/` may not include the older artifacts yet. You then review the event and both campaigns together and publish the event manually in Glue Up. Scheduling is gated on publish and runs with `finalize --confirm`.
+The pre-publish flow is split so existing drafts can be repurposed instead of marked `PLEASE IGNORE`: `ensure` finds or creates the shells, and `populate` updates them. Draft reuse respects the selected template by matching `template-selection.selected.glueUp.blueprintCode` against prior manifests; if no local match exists, `ensure` automatically checks recent GitHub artifacts before creating a new draft. You then review the event and both campaigns together and publish the event manually in Glue Up. Scheduling is gated on publish and runs with `finalize`.
 
 With no arguments, `ensure` pulls the **latest successful prepare run** from CI and infers which event it is from the artifact name — so the event index is named once, on GitHub, and never repeated locally:
 
@@ -82,8 +82,6 @@ Name an index positionally for the normal fresh path.
 
 ```bash
 npm run ensure -- 6                  # normal path: fresh prepare + ensure shells
-npm run ensure -- --event 6         # target a specific older event
-npm run ensure -- --event 6 --fresh # dispatch a new prepare, wait, then ensure shells
 ```
 
 `ensure` requires the `gh` CLI (authenticated) to pull the artifact. Auth resolves in this order: `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment, then a still-valid saved session under `.glueup-session/` (probed headlessly), then a headed login. The saved session is reused across events, so the browser rarely opens.
@@ -149,8 +147,8 @@ You can also use `GOOGLE_ACCESS_TOKEN` or local Google ADC, but those are fallba
 
 ```bash
 npm run ensure -- 6
-npm run populate -- --event 6
-npm run finalize -- --event 6 --confirm
+npm run populate
+npm run finalize
 npm run glueup-login
 npm run check
 ```
@@ -168,7 +166,7 @@ npm run monthly-prepare -- --event 6 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnM
 
 ## Event folder naming
 
-Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. The leading number is the event index — a counter unique across the year — and is the only thing needed to select an event (`--event 6`). The month is read back from the folder name to locate that month's summary doc.
+Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. The leading number is the event index — a counter unique across the year — and is the only thing needed to select an event (`npm run ensure -- 6`). The month is read back from the folder name to locate that month's summary doc.
 
 ## Deployment Model
 
