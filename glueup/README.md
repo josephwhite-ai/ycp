@@ -12,7 +12,7 @@ npm run create-draft -- 6
 
 That command dispatches the GitHub Actions prepare workflow, downloads the resulting artifact, ensures a local Glue Up session, creates the event draft from the approved Glue Up blueprint, creates the two invitation campaign drafts, and applies the standard recipient/setup/content payload. The event index is the leading number in a Drive folder like `06 - June 2026 - NHH`.
 
-If the prepare workflow was already run successfully, omit `--fresh` and let the local command pull the latest prepared event:
+If the prepare workflow was already run successfully, you can let the local command pull the latest prepared event:
 
 ```bash
 npm run create-draft
@@ -73,12 +73,10 @@ With no arguments, `create-draft` pulls the **latest successful prepare run** fr
 npm run create-draft                      # latest prepared event + login if needed + create draft
 ```
 
-Name an index positionally for the normal fresh path. Use `--event` only to target a specific older prepared run. Add `--year 2025` for a past year:
+Name an index positionally for the normal fresh path.
 
 ```bash
 npm run create-draft -- 6                  # normal path: fresh prepare + create draft
-npm run create-draft -- --event 6         # target a specific older event
-npm run create-draft -- --event 6 --fresh # dispatch a new prepare, wait, then create the draft
 ```
 
 `create-draft` requires the `gh` CLI (authenticated) to pull the artifact. Auth resolves in this order: `GLUEUP_COOKIE` + `GLUEUP_CSRF_TOKEN` from the environment, then a still-valid saved session under `.glueup-session/` (probed headlessly), then a headed login. The saved session is reused across events, so the browser rarely opens.
