@@ -39,9 +39,6 @@ Current baseline:
   - Parses newline/semicolon-delimited entries, skips `TBD`, splits names into `firstName`/`lastName`, and maps comma- or hyphen-delimited details into `position`/`company`.
   - Existing speakers are skipped by name (idempotent re-runs).
   - Can be run alone with `npm run populate-speakers -- --event <index>` for repair/debug.
-
-## Todo: Event Draft Fields Not Yet Populated
-
 - [x] Event description / summary (implemented in `populateEventSummaryViaSummaryPage`)
   - Source: `event.description`, from sheet keys `description`, `overview`, or `summary`
   - Also appears in generated `webpage.md`
@@ -53,6 +50,8 @@ Current baseline:
   - Field is named `about` and is rich-text HTML: the editor stores `<p style="text-align: center;">…</p>`, so plain-text `event.description` must be wrapped into `<p>` HTML before saving.
   - Response is JSON `{ code: 200, data.value.about, data.errors: [] }`, so the save is verifiable from `data.value.about` / empty `data.errors`.
   - The summary editor is a contenteditable widget (probe `forms: []` was empty), so replaying the AJAX with `token`/`orgID`/`currentPath` read from the page is more robust than driving the rich-text DOM.
+
+## Todo: Event Draft Fields Not Yet Populated
 
 - [ ] Event type/program type details
   - Source: `event.eventType`
@@ -105,14 +104,6 @@ Current baseline:
 
 ## Implementation Notes
 
-- Main populate gap is in `src/cli.js`, `populateEventSettingsViaSettingsPage`.
-- Current selectors are limited to general settings fields:
-  - `title`
-  - `startDate` / `start_date`
-  - `endDate` / `end_date`
-  - `startTime` / `start_time`
-  - `endTime` / `end_time`
-  - `venue.timezone` / `timezone`
 - Before implementing each unchecked item, use a headed Playwright probe on a disposable draft to capture the actual Glue Up form names and AJAX payloads for the relevant setup page.
 - Reusable event setup probe:
 
