@@ -16,7 +16,7 @@ export class GoogleDriveClient {
     this.accessTokenProvider = accessTokenProvider;
   }
 
-  async listChildren(folderId, { pageSize = 100, fields } = {}) {
+  async listChildren(folderId, { pageSize = 100, fields, driveId } = {}) {
     const params = new URLSearchParams({
       q: `'${folderId}' in parents and trashed = false`,
       pageSize: String(pageSize),
@@ -26,6 +26,11 @@ export class GoogleDriveClient {
         fields ||
         "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink, parents)"
     });
+    // Listing inside a shared drive (e.g. its root) requires the drive scope.
+    if (driveId) {
+      params.set("corpora", "drive");
+      params.set("driveId", driveId);
+    }
 
     const files = [];
     let pageToken = "";
@@ -37,6 +42,27 @@ export class GoogleDriveClient {
     } while (pageToken);
 
     return files;
+  }
+
+  async getFile(fileId, fields = "id, name, mimeType, driveId, parents, modifiedTime") {
+    const params = new URLSearchParams({ supportsAllDrives: "true", fields });
+    return this.#request(`${DRIVE_BASE}/files/${fileId}?${params}`);
+  }
+
+  async query({ q, driveId, pageSize = 50, fields } = {}) {
+    const params = new URLSearchParams({
+      q,
+      pageSize: String(pageSize),
+      supportsAllDrives: "true",
+      includeItemsFromAllDrives: "true",
+      fields: fields || "files(id, name, mimeType, modifiedTime, parents)"
+    });
+    if (driveId) {
+      params.set("corpora", "drive");
+      params.set("driveId", driveId);
+    }
+    const data = await this.#request(`${DRIVE_BASE}/files?${params}`);
+    return data.files || [];
   }
 
   async findChildFolder(parentId, candidates) {
@@ -84,6 +110,18 @@ export class GoogleDriveClient {
     return this.#request(`${DOCS_BASE}/documents/${documentId}`);
   }
 
+  // Downloads the raw bytes of a binary Drive file (e.g. a JPEG/PNG headshot).
+  async downloadFile(fileId) {
+    const params = new URLSearchParams({ alt: "media", supportsAllDrives: "true" });
+    return this.#requestBytes(`${DRIVE_BASE}/files/${fileId}?${params}`);
+  }
+
+  // Downloads an authenticated content URI, e.g. a Google Doc inline image's
+  // `contentUri`. These are short-lived googleusercontent URLs needing the token.
+  async downloadContentUri(uri) {
+    return this.#requestBytes(uri);
+  }
+
   async listImagesRecursive(folderId, { maxDepth = 2 } = {}) {
     const images = [];
     await this.#walk(folderId, 0, maxDepth, images);
@@ -121,6 +159,15 @@ export class GoogleDriveClient {
     }
 
     return response.json();
+  }
+
+  async #requestBytes(url) {
+    const token = await this.accessTokenProvider();
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) {
+      throw new Error(`Google binary download failed ${response.status}: ${await response.text()}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
   }
 }
 
