@@ -59,6 +59,8 @@ try {
     await populateSubtitleWorkflow(args);
   } else if (command === "populate-summary") {
     await populateSummaryWorkflow(args);
+  } else if (command === "populate-speakers") {
+    await populateSpeakersWorkflow(args);
   } else if (command === "finalize") {
     await finalizeWorkflow(args);
   } else if (command === "apply-campaign-setup") {
@@ -230,6 +232,13 @@ async function populateSummaryWorkflow(args) {
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateSummary({ ...args, run: runDir });
+}
+
+async function populateSpeakersWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateSpeakers({ ...args, run: runDir });
 }
 
 async function ensureDraft(args, options = {}) {
@@ -466,13 +475,15 @@ async function populateDraft(args) {
   const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId });
   const subtitleResult = await populateSubtitle({ ...args, run: runDir }, { manifest, event, eventId });
   const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
+  const speakersResult = await populateSpeakers({ ...args, run: runDir }, { manifest, event, eventId });
   manifest.status = "draft_populated";
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
     draftPopulatedAt: new Date().toISOString(),
     ...(summaryResult ? { summaryPopulatedAt: summaryResult.populatedAt } : {}),
     ...(subtitleResult ? { subtitlePopulatedAt: subtitleResult.populatedAt, subtitle: subtitleResult.subtitle } : {}),
-    ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {})
+    ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {}),
+    ...(speakersResult ? { speakersPopulatedAt: speakersResult.populatedAt, speakers: speakersResult.speakers } : {})
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
   console.log(`Populated Glue Up draft ${eventId} from ${runDir}`);
@@ -566,6 +577,42 @@ async function populateSummary(args, options = {}) {
     await writeJson(join(runDir, "manifest.json"), manifest);
   }
   return { populatedAt };
+}
+
+async function populateSpeakers(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  const speakers = normalizeEventSpeakers(event);
+  if (!speakers.length) {
+    console.log("Skipping speaker populate: no non-TBD speakers were found.");
+    return null;
+  }
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const populated = await populateEventSpeakersViaAjax({
+    eventId,
+    speakers,
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    orgId: auth.orgId
+  });
+  if (!populated.length) return null;
+
+  const populatedAt = new Date().toISOString();
+  if (!options.manifest) {
+    manifest.status = "speakers_populated";
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      speakersPopulatedAt: populatedAt,
+      speakers: populated
+    };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt, speakers: populated };
 }
 
 async function populateCampaigns(args) {
@@ -984,7 +1031,110 @@ async function populateEventVenueViaAjax({ eventId, event, cookie, csrfToken, or
   };
 }
 
+// Adds each speaker to the draft via the speakers page's `create-manual-speaker`
+// AJAX action (the same action the "add manually" UI fires). Existing speakers are
+// skipped by name so re-runs stay idempotent. The default profile image mirrors what
+// the Glue Up UI sends for a manually-created speaker with no photo.
+const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
+
+async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfToken, orgId }) {
+  if (!speakers.length) return [];
+  const currentPath = `/events/${eventId}/publishing/content/speakers/`;
+  const pageHtml = await fetchGlueUpPageHtml({ path: currentPath, cookie });
+  const pageCsrfToken = extractGlueUpCsrfToken(pageHtml) || csrfToken;
+
+  const populated = [];
+  for (const speaker of speakers) {
+    if (pageHtml.includes(speaker.fullName)) {
+      console.log(`Skipping existing speaker: ${speaker.fullName}`);
+      populated.push({ ...speaker, skipped: true });
+      continue;
+    }
+    const data = {
+      id: "",
+      email: "",
+      order: { code: "-1" },
+      description: speaker.description || "",
+      website: "",
+      company: speaker.company || "",
+      position: speaker.position || "",
+      lastName: speaker.lastName || "",
+      firstName: speaker.firstName || "",
+      image: {
+        uri: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI,
+        originalUri: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI,
+        styleString: `background-image: url( ${GLUEUP_DEFAULT_SPEAKER_IMAGE_URI} );`,
+        html: { src: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI }
+      }
+    };
+    await postGlueUpAjax({
+      path: `/events/${eventId}/publishing/content/speakers/ajax`,
+      currentPath,
+      refererPath: currentPath,
+      action: "create-manual-speaker",
+      data,
+      cookie,
+      csrfToken: pageCsrfToken,
+      orgId
+    });
+    console.log(`Populated speaker: ${speaker.fullName}`);
+    populated.push(speaker);
+  }
+  return populated;
+}
+
+// Parses the raw speaker field into structured entries, dropping TBD placeholders.
+function normalizeEventSpeakers(event) {
+  const rawSpeakers = Array.isArray(event?.speakers) && event.speakers.length
+    ? event.speakers
+    : splitSpeakerEntries(rawEventField(event, ["speaker (if applicable)", "speakers", "speaker", "presenter", "presenters"]));
+  return rawSpeakers
+    .map((speaker) => parseSpeakerEntry(speaker))
+    .filter((speaker) => speaker && !/^tbd\b/i.test(speaker.fullName));
+}
+
+function splitSpeakerEntries(value) {
+  return String(value || "")
+    .replace(/\u000b/g, "\n")
+    .split(/\n|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseSpeakerEntry(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const [namePart, ...detailParts] = raw.includes(",") ? raw.split(",") : raw.split(/\s+-\s+/);
+  const fullName = cleanSingleLine(namePart);
+  if (!fullName) return null;
+  const detail = detailParts.join(raw.includes(",") ? "," : " - ").trim();
+  const { position, company } = parseSpeakerDetail(detail);
+  const { firstName, lastName } = splitSpeakerName(fullName);
+  return { fullName, firstName, lastName, position, company, description: "" };
+}
+
+function parseSpeakerDetail(value) {
+  const detail = cleanSingleLine(value);
+  if (!detail) return { position: "", company: "" };
+  const parts = detail.split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return { position: parts[0], company: parts.slice(1).join(" - ") };
+  }
+  return { position: detail, company: "" };
+}
+
+function splitSpeakerName(fullName) {
+  const parts = cleanSingleLine(fullName).split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return { firstName: parts[0] || "", lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
 async function fetchGlueUpPageCsrfToken({ path, cookie, fallback }) {
+  const html = await fetchGlueUpPageHtml({ path, cookie });
+  return extractGlueUpCsrfToken(html) || fallback;
+}
+
+async function fetchGlueUpPageHtml({ path, cookie }) {
   const response = await fetch(`${GLUEUP_BASE_URL}${path}`, {
     headers: {
       cookie,
@@ -994,13 +1144,17 @@ async function fetchGlueUpPageCsrfToken({ path, cookie, fallback }) {
   });
   const html = await response.text();
   if (!response.ok) {
-    throw new Error(`Failed to load Glue Up page ${path} for CSRF token (${response.status}).`);
+    throw new Error(`Failed to load Glue Up page ${path} (${response.status}).`);
   }
+  return html;
+}
+
+function extractGlueUpCsrfToken(html) {
   const match =
     html.match(/<meta[^>]+id=["']csrf-token["'][^>]*\scontent=["']([^"']+)["']/i) ||
     html.match(/<meta[^>]+name=["']csrf-token["'][^>]*\scontent=["']([^"']+)["']/i) ||
     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*\s(?:id|name)=["']csrf-token["']/i);
-  return match?.[1] || fallback;
+  return match?.[1] || "";
 }
 
 function normalizeEventVenue(event) {
@@ -1630,6 +1784,7 @@ Usage:
   npm run populate-venue   # populate only the active draft venue
   npm run populate-subtitle # populate only the active draft subtitle
   npm run populate-summary # populate only the active draft description/summary
+  npm run populate-speakers # populate only the active draft speakers
   npm run finalize         # schedule campaigns after manual review and publish
 
 Support/debug commands:
@@ -1642,6 +1797,7 @@ Support/debug commands:
   npm run populate-venue -- --event 6
   npm run populate-subtitle -- --event 6
   npm run populate-summary -- --event 6
+  npm run populate-speakers -- --event 6
 
 Options:
   --year YYYY        Defaults to the current year for ensure
