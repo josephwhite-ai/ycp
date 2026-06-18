@@ -21,7 +21,8 @@ Current baseline:
   - Source: `event.rawFields.time`, parsed by `parseEventTimes` via the shared `parseEventAgenda` (`src/extract/agenda.js`)
   - Current target: settings/general `startTime` and `endTime`
   - A multi-line `time` block is parsed into agenda rows; the event window spans the **public** rows only (first public start to last public end). Internal leadership rows are excluded so setup/cleanup never widen the window.
-  - Internal rows are detected by a `(…leadership/staff/crew/team…)`-style parenthetical OR setup/teardown keywords (set up, clean up, load in/out, tear down, strike).
+  - Internal rows are detected three ways (union): the **sandwich structure** (in a 3+ row agenda the first and last rows are always internal), a `(…leadership/staff/crew/team…)`-style parenthetical, OR setup/teardown keywords (set up, clean up, load in/out, tear down, strike).
+  - The sandwich rule requires 3+ rows so a single overall time range or a two-item list is never hollowed out; the tag/keyword detection still covers those shorter cases.
   - The public rows are also stored on `event.agenda`, rendered as a `## Schedule` section in `webpage.md`, and exposed to the OpenAI generator as `event.publicSchedule` (with the raw internal rows stripped from the prompt).
 - [x] Event timezone
   - Source: config timezone, default `America/New_York`
