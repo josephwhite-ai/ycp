@@ -16,7 +16,7 @@ import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsT
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
-import { buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
+import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
 import {
   addCampaign,
   applyCampaignSetup,
@@ -53,6 +53,10 @@ try {
     await ensureWorkflow(args);
   } else if (command === "populate") {
     await populateWorkflow(args);
+  } else if (command === "populate-venue") {
+    await populateVenueWorkflow(args);
+  } else if (command === "populate-subtitle") {
+    await populateSubtitleWorkflow(args);
   } else if (command === "finalize") {
     await finalizeWorkflow(args);
   } else if (command === "apply-campaign-setup") {
@@ -203,6 +207,20 @@ async function finalizeWorkflow(args) {
   const runDir = resolveRunDir(args);
   await writeCurrentRun(runDir);
   await scheduleCampaigns({ ...args, run: runDir });
+}
+
+async function populateVenueWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateVenue({ ...args, run: runDir });
+}
+
+async function populateSubtitleWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateSubtitle({ ...args, run: runDir });
 }
 
 async function ensureDraft(args, options = {}) {
@@ -441,16 +459,81 @@ async function populateDraft(args) {
     event,
     headless: !args.headed
   });
+  const subtitleResult = await populateSubtitle({ ...args, run: runDir }, { manifest, event, eventId });
+  const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
   manifest.status = "draft_populated";
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
-    draftPopulatedAt: new Date().toISOString()
+    draftPopulatedAt: new Date().toISOString(),
+    ...(subtitleResult ? { subtitlePopulatedAt: subtitleResult.populatedAt, subtitle: subtitleResult.subtitle } : {}),
+    ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {})
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
   console.log(`Populated Glue Up draft ${eventId} from ${runDir}`);
   if (!summaryPopulated) {
     console.log("No event description in event.json; left the Glue Up summary unchanged.");
   }
+}
+
+async function populateVenue(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const venue = await populateEventVenueViaAjax({
+    eventId,
+    event,
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    orgId: auth.orgId
+  });
+  if (!venue) return null;
+
+  const populatedAt = new Date().toISOString();
+  if (!options.manifest) {
+    manifest.status = "venue_populated";
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      venuePopulatedAt: populatedAt,
+      venue
+    };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt, venue };
+}
+
+async function populateSubtitle(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  const subtitle = eventSubtitleFromTalkTopic(event);
+  if (!subtitle) {
+    console.log("Skipping subtitle populate: talk topic is blank or duplicates the event title.");
+    return null;
+  }
+
+  await populateEventSubtitleViaSettingsPage({
+    eventId,
+    subtitle,
+    headless: !args.headed
+  });
+  const populatedAt = new Date().toISOString();
+  if (!options.manifest) {
+    manifest.status = "subtitle_populated";
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      subtitlePopulatedAt: populatedAt,
+      subtitle
+    };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt, subtitle };
 }
 
 async function populateCampaigns(args) {
@@ -736,6 +819,237 @@ async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, 
   } finally {
     await context.close().catch(() => {});
   }
+}
+
+async function populateEventSubtitleViaSettingsPage({ eventId, subtitle, headless }) {
+  const { chromium } = await import("playwright");
+  const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless,
+    viewport: { width: 1440, height: 1000 }
+  });
+  const page = context.pages()[0] || (await context.newPage());
+  try {
+    await page.goto(`https://ycp.glueup.com/events/${eventId}/setup/settings/general/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.locator('input[name="subtitle"]').first().waitFor({ state: "visible", timeout: 60_000 });
+    await fillFirstVisible(page, ['input[name="subtitle"]'], subtitle);
+
+    const responsePromise = page
+      .waitForResponse((response) =>
+        response.url().includes(`/events/${eventId}/setup/settings/general/ajax`) &&
+        response.request().method() === "POST"
+      )
+      .catch(() => null);
+    await page.locator('button.save-button, [data-event="StandardForm::submit"]').first().click();
+    const response = await responsePromise;
+    if (response && !response.ok()) {
+      throw new Error(`Glue Up subtitle save failed ${response.status()}.`);
+    }
+    await page.waitForTimeout(1_000);
+    const currentSubtitle = await page.locator('input[name="subtitle"]').first().inputValue();
+    if (currentSubtitle !== subtitle) {
+      throw new Error(`Glue Up subtitle save did not persist; current subtitle is "${currentSubtitle}".`);
+    }
+    console.log(`Populated subtitle: ${subtitle}`);
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+function eventSubtitleFromTalkTopic(event) {
+  const topic = cleanSingleLine(rawEventField(event, ["talk topic (if applicable)", "talk topic", "topic"]));
+  const title = cleanSingleLine(event?.eventName || event?.sourceDocumentTitle || "");
+  if (!topic || normalizeComparableText(topic) === normalizeComparableText(title)) return "";
+  return topic;
+}
+
+function rawEventField(event, keys) {
+  const rawFields = event?.rawFields || {};
+  for (const key of keys) {
+    const normalized = key.toLowerCase().replace(/[:*]/g, "").replace(/\s+/g, " ").trim();
+    if (rawFields[normalized]) return rawFields[normalized];
+  }
+  return "";
+}
+
+function cleanSingleLine(value) {
+  return String(value || "")
+    .replace(/\u000b/g, "\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || "";
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+async function populateEventVenueViaAjax({ eventId, event, cookie, csrfToken, orgId }) {
+  const venue = normalizeEventVenue(event);
+  if (!venue.full) {
+    console.log("Skipping venue populate: event.venue is blank.");
+    return null;
+  }
+  const currentPath = `/events/${eventId}/publishing/content/venue/`;
+  const pageCsrfToken = await fetchGlueUpPageCsrfToken({
+    path: currentPath,
+    cookie,
+    fallback: csrfToken
+  });
+
+  const geo = await searchVenueGeo({
+    eventId,
+    search: venue.search,
+    cookie,
+    csrfToken: pageCsrfToken,
+    orgId
+  });
+  const payload = {
+    id: "0",
+    file: {
+      id: "",
+      uri: "",
+      name: "",
+      type: "",
+      size: 0,
+      createdOn: Date.now()
+    },
+    info: "",
+    "address.provinceDropdown.us": {},
+    country: {
+      code: "US"
+    },
+    cityName: venue.city,
+    address: venue.address,
+    name: venue.name,
+    geo,
+    submit: "save"
+  };
+
+  await postGlueUpAjax({
+    path: `/events/${eventId}/publishing/content/venue/ajax`,
+    currentPath: `/events/${eventId}/publishing/content/venue/`,
+    refererPath: `/events/${eventId}/publishing/content/venue/`,
+    action: "EventVenueSubmit",
+    data: payload,
+    cookie,
+    csrfToken: pageCsrfToken,
+    orgId
+  });
+  console.log(`Populated venue: ${venue.name || venue.address}`);
+  return {
+    name: venue.name,
+    address: venue.address,
+    cityName: venue.city,
+    countryCode: "US",
+    geo
+  };
+}
+
+async function fetchGlueUpPageCsrfToken({ path, cookie, fallback }) {
+  const response = await fetch(`${GLUEUP_BASE_URL}${path}`, {
+    headers: {
+      cookie,
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    }
+  });
+  const html = await response.text();
+  if (!response.ok) {
+    throw new Error(`Failed to load Glue Up page ${path} for CSRF token (${response.status}).`);
+  }
+  const match =
+    html.match(/<meta[^>]+id=["']csrf-token["'][^>]*\scontent=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+name=["']csrf-token["'][^>]*\scontent=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*\s(?:id|name)=["']csrf-token["']/i);
+  return match?.[1] || fallback;
+}
+
+function normalizeEventVenue(event) {
+  const full = String(event?.venue || "").replace(/\r\n/g, "\n").trim();
+  const lines = full
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const name = lines[0] || "";
+  const addressLines = lines.slice(1);
+  const city = String(event?.city || inferCityFromAddressLines(addressLines) || "").trim();
+  const address = addressLines[0] || "";
+  const search = [name, ...addressLines, city].filter(Boolean).join(" ");
+  return { full, name, address, city, search };
+}
+
+function inferCityFromAddressLines(lines) {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const match = /^([^,\n]+),?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/.exec(lines[i]);
+    if (match) return match[1].trim();
+  }
+  return "";
+}
+
+async function searchVenueGeo({ eventId, search, cookie, csrfToken, orgId }) {
+  const response = await postGlueUpAjax({
+    path: "/map/ajax",
+    currentPath: `/events/${eventId}/publishing/content/venue/`,
+    refererPath: `/events/${eventId}/publishing/content/venue/`,
+    action: "search",
+    data: { search },
+    cookie,
+    csrfToken,
+    orgId
+  });
+  const value = response?.data?.value;
+  if (!value || typeof value.latitude !== "number" || typeof value.longitude !== "number") {
+    throw new Error(`Glue Up map search did not return coordinates for venue search "${search}".`);
+  }
+  return {
+    latitude: value.latitude,
+    longitude: value.longitude,
+    zoom: typeof value.zoom === "number" ? value.zoom : 14
+  };
+}
+
+async function postGlueUpAjax({ path, currentPath, refererPath, action, data, cookie, csrfToken, orgId }) {
+  if (!cookie) throw new Error("Missing GLUEUP_COOKIE.");
+  if (!csrfToken) throw new Error("Missing Glue Up CSRF token.");
+  const body = new URLSearchParams({
+    action,
+    data: JSON.stringify(data || {}),
+    token: csrfToken,
+    orgID: String(orgId),
+    currentPath
+  });
+  const response = await fetch(`${GLUEUP_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/javascript, */*; q=0.01",
+      "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+      origin: GLUEUP_BASE_URL,
+      referer: `${GLUEUP_BASE_URL}${refererPath || currentPath}`,
+      "x-requested-with": "XMLHttpRequest",
+      cookie
+    },
+    body: body.toString()
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Glue Up ${action} failed ${response.status}: ${text}`);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Glue Up ${action} returned non-JSON response: ${text}`);
+  }
+  assertNoAppError(payload, action);
+  return payload;
 }
 
 async function fillFirstVisible(page, selectors, value) {
@@ -1281,6 +1595,8 @@ function usage() {
 Usage:
   npm run ensure -- 6      # pull event data, ensure Glue Up session, draft, and campaigns
   npm run populate         # populate the active draft and campaigns
+  npm run populate-venue   # populate only the active draft venue
+  npm run populate-subtitle # populate only the active draft subtitle
   npm run finalize         # schedule campaigns after manual review and publish
 
 Support/debug commands:
@@ -1290,6 +1606,8 @@ Support/debug commands:
   npm run validate -- --run runs/evt-2026-006
   npm run apply-campaign-setup -- --event 6
   npm run mark-ignore -- --event 6 --headed
+  npm run populate-venue -- --event 6
+  npm run populate-subtitle -- --event 6
 
 Options:
   --year YYYY        Defaults to the current year for ensure
