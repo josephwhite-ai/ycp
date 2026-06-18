@@ -9,7 +9,6 @@
     "ensure": "node src/cli.js ensure",
     "populate": "node src/cli.js populate",
     "populate-venue": "node src/cli.js populate-venue",
-    "populate-subtitle": "node src/cli.js populate-subtitle",
     "populate-summary": "node src/cli.js populate-summary",
     "populate-speakers": "node src/cli.js populate-speakers",
     "finalize": "node src/cli.js finalize",
