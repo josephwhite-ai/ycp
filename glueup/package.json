@@ -10,6 +10,7 @@
     "populate": "node src/cli.js populate",
     "populate-venue": "node src/cli.js populate-venue",
     "populate-subtitle": "node src/cli.js populate-subtitle",
+    "populate-summary": "node src/cli.js populate-summary",
     "finalize": "node src/cli.js finalize",
     "apply-campaign-setup": "node src/cli.js apply-campaign-setup",
     "mark-ignore": "node src/cli.js mark-ignore",

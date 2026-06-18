@@ -44,6 +44,7 @@ Current baseline:
   - Source: `event.description`, from sheet keys `description`, `overview`, or `summary`
   - Also appears in generated `webpage.md`
   - Populates the event page body/overview (`about`) section in the approved Glue Up template.
+  - Can be run alone with `npm run populate-summary -- --event <index>` for repair/debug.
   - Confirmed UI: `/events/<eventId>/publishing/content/summary/`, separate from settings/general and from venue.
   - Confirmed save endpoint: `/events/<eventId>/publishing/content/summary/ajax`, action `StandardFormSubmit`.
   - Confirmed `StandardFormSubmit` payload: envelope fields `action`, `token`, `orgID`, `currentPath`, plus `language` (e.g. `en`), `about`, and `submit: "save"`.

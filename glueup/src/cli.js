@@ -57,6 +57,8 @@ try {
     await populateVenueWorkflow(args);
   } else if (command === "populate-subtitle") {
     await populateSubtitleWorkflow(args);
+  } else if (command === "populate-summary") {
+    await populateSummaryWorkflow(args);
   } else if (command === "finalize") {
     await finalizeWorkflow(args);
   } else if (command === "apply-campaign-setup") {
@@ -221,6 +223,13 @@ async function populateSubtitleWorkflow(args) {
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateSubtitle({ ...args, run: runDir });
+}
+
+async function populateSummaryWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateSummary({ ...args, run: runDir });
 }
 
 async function ensureDraft(args, options = {}) {
@@ -454,23 +463,20 @@ async function populateDraft(args) {
     timezone: getConfig({ timezone: args.timezone }).timezone,
     headless: !args.headed
   });
-  const summaryPopulated = await populateEventSummaryViaSummaryPage({
-    eventId,
-    event,
-    headless: !args.headed
-  });
+  const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId });
   const subtitleResult = await populateSubtitle({ ...args, run: runDir }, { manifest, event, eventId });
   const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
   manifest.status = "draft_populated";
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
     draftPopulatedAt: new Date().toISOString(),
+    ...(summaryResult ? { summaryPopulatedAt: summaryResult.populatedAt } : {}),
     ...(subtitleResult ? { subtitlePopulatedAt: subtitleResult.populatedAt, subtitle: subtitleResult.subtitle } : {}),
     ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {})
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
   console.log(`Populated Glue Up draft ${eventId} from ${runDir}`);
-  if (!summaryPopulated) {
+  if (!summaryResult) {
     console.log("No event description in event.json; left the Glue Up summary unchanged.");
   }
 }
@@ -534,6 +540,32 @@ async function populateSubtitle(args, options = {}) {
     await writeJson(join(runDir, "manifest.json"), manifest);
   }
   return { populatedAt, subtitle };
+}
+
+async function populateSummary(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  const populated = await populateEventSummaryViaSummaryPage({
+    eventId,
+    event,
+    headless: !args.headed
+  });
+  if (!populated) return null;
+
+  const populatedAt = new Date().toISOString();
+  if (!options.manifest) {
+    manifest.status = "summary_populated";
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      summaryPopulatedAt: populatedAt
+    };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt };
 }
 
 async function populateCampaigns(args) {
@@ -1597,6 +1629,7 @@ Usage:
   npm run populate         # populate the active draft and campaigns
   npm run populate-venue   # populate only the active draft venue
   npm run populate-subtitle # populate only the active draft subtitle
+  npm run populate-summary # populate only the active draft description/summary
   npm run finalize         # schedule campaigns after manual review and publish
 
 Support/debug commands:
@@ -1608,6 +1641,7 @@ Support/debug commands:
   npm run mark-ignore -- --event 6 --headed
   npm run populate-venue -- --event 6
   npm run populate-subtitle -- --event 6
+  npm run populate-summary -- --event 6
 
 Options:
   --year YYYY        Defaults to the current year for ensure
