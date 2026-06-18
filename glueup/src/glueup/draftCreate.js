@@ -1,3 +1,5 @@
+import { parseEventAgenda, selectPublicAgenda } from "../extract/agenda.js";
+
 const DEFAULT_BASE_URL = "https://ycp.glueup.com";
 const DEFAULT_ORG_ID = "5828";
 
@@ -131,24 +133,18 @@ export async function fetchCsrfToken({ cookie, eventType, baseUrl = DEFAULT_BASE
 export function parseEventTimes(event) {
   const startDate = event?.eventDate || "";
   const blank = { startDate, startTime: "", endDate: startDate, endTime: "" };
-  const raw = event?.rawFields?.time || "";
-  const m = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(raw);
-  if (!startDate || !m) return blank;
+  if (!startDate) return blank;
 
-  const endMeridiem = (m[6] || m[3] || "").toLowerCase();
-  const startMeridiem = (m[3] || m[6] || "").toLowerCase();
-  const to24 = (hourStr, minStr, meridiem) => {
-    let hour = Number(hourStr);
-    if (meridiem === "pm" && hour < 12) hour += 12;
-    if (meridiem === "am" && hour === 12) hour = 0;
-    return `${String(hour).padStart(2, "0")}:${minStr || "00"}`;
-  };
+  // The event window spans the public agenda only: internal leadership rows
+  // (setup/cleanup) must not pull the start earlier or push the end later.
+  const publicRows = selectPublicAgenda(parseEventAgenda(event?.rawFields?.time || ""));
+  if (!publicRows.length) return blank;
 
   return {
     startDate,
-    startTime: to24(m[1], m[2], startMeridiem),
+    startTime: publicRows[0].startTime,
     endDate: startDate,
-    endTime: to24(m[4], m[5], endMeridiem)
+    endTime: publicRows[publicRows.length - 1].endTime
   };
 }
 
