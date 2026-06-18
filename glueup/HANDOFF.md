@@ -32,6 +32,11 @@ Current baseline:
   - Source: `event.city`, or inferred from the final venue/address line when it looks like `City ST ZIP`
   - Current target: `cityName` in the `EventVenueSubmit` payload
   - Follow-up: if Glue Up exposes province/state separately in a required case, extend the venue payload beyond the currently-empty `address.provinceDropdown.us` object captured from the UI.
+- [x] Talk topic as subtitle
+  - Source: `event.rawFields["talk topic (if applicable)"]`, falling back to `talk topic` or `topic`
+  - Current target: settings/general `input[name="subtitle"]`
+  - Skips when the talk topic is blank or duplicates `event.eventName`.
+  - Can be run alone with `npm run populate-subtitle -- --event <index>` for repair/debug.
 
 ## Todo: Event Draft Fields Not Yet Populated
 
@@ -44,10 +49,6 @@ Current baseline:
   - Source: `event.rawFields["speaker (if applicable)"]`
   - Example from `runs/evt-2026-007/event.json`: `Joseph Frissora III`, `Justin Murphy`, `TBD`
   - Need to decide whether to populate Glue Up speakers, agenda/session speaker blocks, or template content blocks. The extractor currently leaves these only in `rawFields`; it does not normalize them into a first-class `speakers` array unless they appear in a session table.
-
-- [ ] Talk topic
-  - Source: `event.rawFields["talk topic (if applicable)"]`, also used to normalize `event.eventName`
-  - Need to determine whether the topic should populate a subtitle, agenda title, event headline, or only remain as the event title.
 
 - [ ] Event type/program type details
   - Source: `event.eventType`
