@@ -15,6 +15,10 @@ on:
         description: 'Base name for the output file (derived from PDF URL)'
         required: true
         type: string
+      apps_script_id:
+        description: 'Optional Apps Script project ID to export for migration analysis'
+        required: false
+        type: string
 
 jobs:
   extract:
@@ -34,7 +38,22 @@ jobs:
       - name: Install dependencies
         run: pip install pypdf google-genai google-auth google-api-python-client
 
+      - name: Export Apps Script project
+        if: ${{ github.event.inputs.apps_script_id != '' }}
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          APPS_SCRIPT_ID: ${{ github.event.inputs.apps_script_id }}
+        run: python bulletins/export_apps_script.py "$APPS_SCRIPT_ID" artifacts/apps-script-content.json
+
+      - name: Upload Apps Script export
+        if: ${{ github.event.inputs.apps_script_id != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: apps-script-content
+          path: artifacts/apps-script-content.json
+
       - name: Extract events and write to Google Doc
+        if: ${{ github.event.inputs.apps_script_id == '' }}
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
