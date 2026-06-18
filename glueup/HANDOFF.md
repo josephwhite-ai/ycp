@@ -23,18 +23,17 @@ Current baseline:
 - [x] Event timezone
   - Source: config timezone, default `America/New_York`
   - Current target: settings/general `venue.timezone` or `timezone`
+- [x] Venue/location
+  - Source: `event.venue`, from sheet keys `venue`, `location`, or `place`
+  - Current target: `/events/<eventId>/publishing/content/venue/ajax`, action `EventVenueSubmit`
+  - Geo coordinates are resolved through `/map/ajax`, action `search`, using the sheet venue/address text.
+  - Can be run alone with `npm run populate-venue -- --event <index>` for repair/debug.
+- [x] City
+  - Source: `event.city`, or inferred from the final venue/address line when it looks like `City ST ZIP`
+  - Current target: `cityName` in the `EventVenueSubmit` payload
+  - Follow-up: if Glue Up exposes province/state separately in a required case, extend the venue payload beyond the currently-empty `address.provinceDropdown.us` object captured from the UI.
 
 ## Todo: Event Draft Fields Not Yet Populated
-
-- [ ] Venue/location
-  - Source: `event.venue`, from sheet keys `venue`, `location`, or `place`
-  - Example from `runs/evt-2026-007/event.json`: `St. Thomas the Apostle`, address, city/state/ZIP
-  - Need to determine Glue Up target fields. Current code does not fill venue name, address, city, or map/location fields.
-
-- [ ] City
-  - Source: `event.city`, from sheet key `city`
-  - Note: many sheets put city inside the multiline `location` value instead of the `city` field. Decide whether to parse city from `event.venue` when `event.city` is blank.
-  - Need to determine whether Glue Up stores this separately from venue/address.
 
 - [ ] Event description / summary
   - Source: `event.description`, from sheet keys `description`, `overview`, or `summary`
@@ -110,4 +109,12 @@ Current baseline:
   - `endTime` / `end_time`
   - `venue.timezone` / `timezone`
 - Before implementing each unchecked item, use a headed Playwright probe on a disposable draft to capture the actual Glue Up form names and AJAX payloads for the relevant setup page.
+- Reusable event setup probe:
+
+```bash
+npm run probe-event-setup -- --event <eventId>
+npm run probe-event-setup -- --event <eventId> --path '/events/{eventId}/publishing/content/venue/' --report venue-probe.json --capture-values
+```
+
+The probe opens a headed browser with the saved Glue Up session, snapshots form controls, records setup-related GETs and AJAX POST payload shapes, and blocks destructive publish/send-style actions. Reports stream to `.glueup-debug/` and are gitignored. Use `--capture-values` only when replayable values are needed; token/cookie/password-like fields remain redacted.
 - Keep the publish gate unchanged: `populate` may update draft content, but it must never publish the event.
