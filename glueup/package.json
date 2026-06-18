@@ -8,13 +8,15 @@
     "validate": "node src/cli.js validate",
     "ensure": "node src/cli.js ensure",
     "populate": "node src/cli.js populate",
+    "populate-venue": "node src/cli.js populate-venue",
     "finalize": "node src/cli.js finalize",
     "apply-campaign-setup": "node src/cli.js apply-campaign-setup",
     "mark-ignore": "node src/cli.js mark-ignore",
     "sync-run": "node src/cli.js sync-run",
     "glueup-login": "node src/cli.js glueup-login",
+    "probe-event-setup": "node scripts/probe-event-setup.mjs",
     "probe-campaign": "node scripts/probe-campaign.mjs",
-    "check": "node --check src/cli.js && node --check src/config.js && node --check src/drive/googleDriveClient.js && node --check src/extract/docsTableExtractor.js && node --check src/generate/contentGenerator.js && node --check src/glueup/draftCreate.js && node --check src/glueup/campaignCreate.js && node --check src/glueup/session.js && node --check src/templates/eventTypes.js && node --check src/validate/validators.js"
+    "check": "node --check src/cli.js && node --check src/config.js && node --check src/drive/googleDriveClient.js && node --check src/extract/docsTableExtractor.js && node --check src/generate/contentGenerator.js && node --check src/glueup/draftCreate.js && node --check src/glueup/campaignCreate.js && node --check src/glueup/session.js && node --check src/templates/eventTypes.js && node --check src/validate/validators.js && node --check scripts/lib/probeCore.mjs && node --check scripts/probe-event-setup.mjs && node --check scripts/probe-campaign.mjs"
   },
   "dependencies": {
     "playwright": "^1.53.0"
