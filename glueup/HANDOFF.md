@@ -37,6 +37,13 @@ Current baseline:
   - Current target: settings/general `input[name="subtitle"]`
   - Skips when the talk topic is blank or duplicates `event.eventName`.
   - Can be run alone with `npm run populate-subtitle -- --event <index>` for repair/debug.
+- [x] Speaker names and speaker details (implemented in `populateEventSpeakersViaAjax`)
+  - Source: top-level `event.speakers`, extracted from `event.rawFields["speaker (if applicable)"]`, falling back to speaker/presenter variants.
+  - Current target: `/events/<eventId>/publishing/content/speakers/ajax`, action `create-manual-speaker` (the same action the "add manually" UI fires; not `SpeakerStandardFormSubmit`).
+  - Payload: envelope `action`/`token`/`orgID`/`currentPath`, plus `data` with `id:""`, `firstName`, `lastName`, `position`, `company`, `email`, `website`, `description`, `order.code:"-1"`, and a default-profile `image` object.
+  - Parses newline/semicolon-delimited entries, skips `TBD`, splits names into `firstName`/`lastName`, and maps comma- or hyphen-delimited details into `position`/`company`.
+  - Existing speakers are skipped by name (idempotent re-runs).
+  - Can be run alone with `npm run populate-speakers -- --event <index>` for repair/debug.
 
 ## Todo: Event Draft Fields Not Yet Populated
 
@@ -51,11 +58,6 @@ Current baseline:
   - Field is named `about` and is rich-text HTML: the editor stores `<p style="text-align: center;">…</p>`, so plain-text `event.description` must be wrapped into `<p>` HTML before saving.
   - Response is JSON `{ code: 200, data.value.about, data.errors: [] }`, so the save is verifiable from `data.value.about` / empty `data.errors`.
   - The summary editor is a contenteditable widget (probe `forms: []` was empty), so replaying the AJAX with `token`/`orgID`/`currentPath` read from the page is more robust than driving the rich-text DOM.
-
-- [ ] Speaker names and speaker details
-  - Source: `event.rawFields["speaker (if applicable)"]`
-  - Example from `runs/evt-2026-007/event.json`: `Joseph Frissora III`, `Justin Murphy`, `TBD`
-  - Need to decide whether to populate Glue Up speakers, agenda/session speaker blocks, or template content blocks. The extractor currently leaves these only in `rawFields`; it does not normalize them into a first-class `speakers` array unless they appear in a session table.
 
 - [ ] Event type/program type details
   - Source: `event.eventType`

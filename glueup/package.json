@@ -11,6 +11,7 @@
     "populate-venue": "node src/cli.js populate-venue",
     "populate-subtitle": "node src/cli.js populate-subtitle",
     "populate-summary": "node src/cli.js populate-summary",
+    "populate-speakers": "node src/cli.js populate-speakers",
     "finalize": "node src/cli.js finalize",
     "apply-campaign-setup": "node src/cli.js apply-campaign-setup",
     "mark-ignore": "node src/cli.js mark-ignore",

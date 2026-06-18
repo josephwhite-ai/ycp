@@ -158,5 +158,5 @@ export function validationReport(validation) {
 }
 
 function hasSpeakers(event) {
-  return (event.sessions || []).some((session) => session.speakers?.length);
+  return (event.speakers || []).length > 0 || (event.sessions || []).some((session) => session.speakers?.length);
 }

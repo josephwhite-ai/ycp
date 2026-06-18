@@ -37,6 +37,7 @@ export function extractEventFromGoogleDoc(doc) {
     registrationUrl: pick(fields, ["registration url", "registration link", "link", "url"]) || "",
     description: cleanText(pick(fields, ["description", "overview", "summary"]) || paragraphs.join("\n\n")),
     rawFields: fields,
+    speakers: splitSpeakerEntries(pick(fields, ["speaker (if applicable)", "speakers", "speaker", "presenter", "presenters"]) || ""),
     sessions
   });
 
@@ -133,6 +134,14 @@ function pick(object, keys) {
 function splitPeople(value) {
   return value
     .split(/\n|;|,(?=\s*[A-Z])/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitSpeakerEntries(value) {
+  return String(value || "")
+    .replace(/\u000b/g, "\n")
+    .split(/\n|;/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
