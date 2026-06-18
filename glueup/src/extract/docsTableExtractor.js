@@ -51,7 +51,7 @@ export function normalizeEventFields(event) {
   const eventName = cleanTitleCandidate(event?.eventName);
   return {
     ...event,
-    eventName: explicitTitle || topic || eventName || event?.sourceDocumentTitle?.replace(/ - Event Summary Sheet$/i, "") || ""
+    eventName: topic || explicitTitle || eventName || event?.sourceDocumentTitle?.replace(/ - Event Summary Sheet$/i, "") || ""
   };
 }
 

@@ -12,7 +12,7 @@ Current baseline:
 ## Already Populated By `populate`
 
 - [x] Event title
-  - Source: `event.eventName`
+  - Source: `event.rawFields["talk topic (if applicable)"]`, falling back to explicit event name/title fields only when the talk topic is blank
   - Current target: settings/general `input[name="title"]`
 - [x] Event date
   - Source: `event.eventDate`
@@ -32,11 +32,6 @@ Current baseline:
   - Source: `event.city`, or inferred from the final venue/address line when it looks like `City ST ZIP`
   - Current target: `cityName` in the `EventVenueSubmit` payload
   - Follow-up: if Glue Up exposes province/state separately in a required case, extend the venue payload beyond the currently-empty `address.provinceDropdown.us` object captured from the UI.
-- [x] Talk topic as subtitle
-  - Source: `event.rawFields["talk topic (if applicable)"]`, falling back to `talk topic` or `topic`
-  - Current target: settings/general `input[name="subtitle"]`
-  - Skips when the talk topic is blank or duplicates `event.eventName`.
-  - Can be run alone with `npm run populate-subtitle -- --event <index>` for repair/debug.
 - [x] Speaker names and speaker details (implemented in `populateEventSpeakersViaAjax`)
   - Source: top-level `event.speakers`, extracted from `event.rawFields["speaker (if applicable)"]`, falling back to speaker/presenter variants.
   - Current target: `/events/<eventId>/publishing/content/speakers/ajax`, action `create-manual-speaker` (the same action the "add manually" UI fires; not `SpeakerStandardFormSubmit`).
