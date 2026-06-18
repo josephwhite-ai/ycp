@@ -1,3 +1,5 @@
+import { parseEventAgenda } from "./agenda.js";
+
 export function extractEventFromGoogleDoc(doc) {
   const tables = [];
   const paragraphs = [];
@@ -38,6 +40,7 @@ export function extractEventFromGoogleDoc(doc) {
     description: cleanText(pick(fields, ["description", "overview", "summary"]) || paragraphs.join("\n\n")),
     rawFields: fields,
     speakers: splitSpeakerEntries(pick(fields, ["speaker (if applicable)", "speakers", "speaker", "presenter", "presenters"]) || ""),
+    agenda: parseEventAgenda(pick(fields, ["time", "schedule", "agenda", "run of show"]) || ""),
     sessions
   });
 

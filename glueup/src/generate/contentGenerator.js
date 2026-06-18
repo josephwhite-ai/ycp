@@ -1,3 +1,5 @@
+import { parseEventAgenda, selectPublicAgenda, formatAgendaRange } from "../extract/agenda.js";
+
 export async function generateArtifacts({ event, photos, config }) {
   if (config.openaiApiKey) {
     try {
@@ -24,6 +26,17 @@ function generateDeterministicArtifacts({ event, photos }) {
       : "- Registration: to be created in Glue Up"
   ].filter(Boolean).join("\n");
 
+  // Public agenda only: internal leadership rows (setup/cleanup) are excluded.
+  // Only render a Schedule section for a real multi-item agenda, not a single
+  // overall time range (which is already conveyed by the date/time fields).
+  const publicRows = selectPublicAgenda(parseEventAgenda(event.rawFields?.time || ""));
+  const isAgenda = publicRows.length > 1 || publicRows.some((row) => row.label);
+  const scheduleSection = isAgenda
+    ? `\n## Schedule\n\n${publicRows
+        .map((row) => `- ${formatAgendaRange(row)}${row.label ? ` — ${row.label}` : ""}`)
+        .join("\n")}\n`
+    : "";
+
   const webpage = `# ${event.eventName || "Untitled Event"}
 
 Template mode: use the approved Glue Up event template for ${event.eventType || "the selected event type"} and populate the fields below.
@@ -33,7 +46,7 @@ ${event.description || "Event description coming soon."}
 ## Details
 
 ${details || "- Details coming soon."}
-
+${scheduleSection}
 ## Recommended Hero Image
 
 ${hero ? `${hero.name} (${hero.webViewLink || hero.id})` : "No image found."}
@@ -71,6 +84,25 @@ ${event.description || ""}
   };
 }
 async function generateWithOpenAI({ event, photos, config }) {
+  // Sanitize the agenda before sending it to the model: expose only the public
+  // schedule and strip internal leadership rows from the raw time block so they
+  // can never surface in generated public copy.
+  const publicRows = selectPublicAgenda(parseEventAgenda(event.rawFields?.time || ""));
+  const publicSchedule = publicRows.map((row) => ({
+    time: formatAgendaRange(row),
+    label: row.label
+  }));
+  const sanitizedEvent = publicRows.length
+    ? {
+        ...event,
+        rawFields: {
+          ...event.rawFields,
+          time: publicRows.map((row) => `${formatAgendaRange(row)} ${row.label}`.trim()).join("\n")
+        },
+        publicSchedule
+      }
+    : { ...event, publicSchedule };
+
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -89,8 +121,8 @@ async function generateWithOpenAI({ event, photos, config }) {
           role: "user",
           content: JSON.stringify({
             task:
-              "Create a webpage field brief for filling the approved Glue Up event template, a one-week-before campaign-template fill brief, a day-before campaign-template fill brief, and rank photo recommendations. Do not write standalone email campaigns from scratch.",
-            event,
+              "Create a webpage field brief for filling the approved Glue Up event template, a one-week-before campaign-template fill brief, a day-before campaign-template fill brief, and rank photo recommendations. Do not write standalone email campaigns from scratch. For any schedule or agenda, use only event.publicSchedule; never include internal setup, cleanup, or leadership-team items.",
+            event: sanitizedEvent,
             photos: photos.map((photo) => ({
               id: photo.id,
               name: photo.name,

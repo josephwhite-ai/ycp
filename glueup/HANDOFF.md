@@ -18,8 +18,11 @@ Current baseline:
   - Source: `event.eventDate`
   - Current target: settings/general `startDate` and `endDate`
 - [x] Event time
-  - Source: `event.rawFields.time`, parsed by `parseEventTimes`
+  - Source: `event.rawFields.time`, parsed by `parseEventTimes` via the shared `parseEventAgenda` (`src/extract/agenda.js`)
   - Current target: settings/general `startTime` and `endTime`
+  - A multi-line `time` block is parsed into agenda rows; the event window spans the **public** rows only (first public start to last public end). Internal leadership rows are excluded so setup/cleanup never widen the window.
+  - Internal rows are detected by a `(…leadership/staff/crew/team…)`-style parenthetical OR setup/teardown keywords (set up, clean up, load in/out, tear down, strike).
+  - The public rows are also stored on `event.agenda`, rendered as a `## Schedule` section in `webpage.md`, and exposed to the OpenAI generator as `event.publicSchedule` (with the raw internal rows stripped from the prompt).
 - [x] Event timezone
   - Source: config timezone, default `America/New_York`
   - Current target: settings/general `venue.timezone` or `timezone`
