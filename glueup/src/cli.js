@@ -44,6 +44,10 @@ const CURRENT_RUN_FILE = ".glueup-current-run";
 // a temporal-dead-zone error referencing them mid module-evaluation.
 const SPEAKER_FOLDER_RE = /speaker|bio|pic|photo|headshot|presenter|profile/i;
 const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
+// Shared "photo library" drive for event banners, organized as /<YEAR>/<event>/images.
+const PHOTO_LIBRARY_FOLDER_ID = process.env.GLUEUP_PHOTO_LIBRARY_FOLDER_ID || "0APt58RkpagPZUk9PVA";
+const BANNER_SKIP_FOLDER_RE = /pdf split|organizer|eventdata|receipt|^ads$/i;
+const BANNER_CANDIDATE_LIMIT = 8;
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -125,6 +129,12 @@ async function prepare(args) {
     console.log(`Speaker photo gathering failed (non-fatal): ${error.message}`);
     return [];
   });
+  const bannerCandidates = await gatherBannerCandidates(drive).catch((error) => {
+    console.log(`Banner candidate scan failed (non-fatal): ${error.message}`);
+    return [];
+  });
+  console.log(`Banner candidates found: ${bannerCandidates.length}`);
+  for (const c of bannerCandidates) console.log(`  ${c.year}/${c.folder}/${c.name} [${c.mimeType}] (${(c.modifiedTime || "").slice(0, 10)})`);
   const artifacts = await generateArtifacts({ event, photos, config });
   const validation = validateEventRun({ event, artifacts, config });
 
@@ -166,6 +176,37 @@ async function prepare(args) {
 // files are also supported. Speakers with no matching photo are skipped (partial
 // coverage is expected). Returns [{ fullName, firstName, lastName, position,
 // company, photoFile }] for matched speakers; photoFile is relative to runDir.
+// Collects recent banner candidate images from the shared photo-library drive,
+// walking most-recent year -> most-recent event subfolders (skipping utility
+// folders) and taking the newest images first, up to a small candidate cap.
+async function gatherBannerCandidates(drive, { limit = BANNER_CANDIDATE_LIMIT } = {}) {
+  const driveId = PHOTO_LIBRARY_FOLDER_ID;
+  const byRecent = (a, b) => String(b.modifiedTime || "").localeCompare(String(a.modifiedTime || ""));
+  const isFolder = (f) => f.mimeType?.includes("folder");
+
+  const root = await drive.listChildren(driveId, { driveId });
+  const years = root.filter((f) => isFolder(f) && /^\d{4}$/.test(f.name)).sort((a, b) => b.name.localeCompare(a.name));
+
+  const candidates = [];
+  for (const year of years) {
+    if (candidates.length >= limit) break;
+    const subfolders = (await drive.listChildren(year.id, { driveId }))
+      .filter((f) => isFolder(f) && !BANNER_SKIP_FOLDER_RE.test(f.name))
+      .sort(byRecent);
+    for (const sub of subfolders) {
+      if (candidates.length >= limit) break;
+      const images = (await drive.listChildren(sub.id, { driveId }))
+        .filter((f) => f.mimeType?.startsWith("image/"))
+        .sort(byRecent);
+      for (const img of images) {
+        candidates.push({ id: img.id, name: img.name, mimeType: img.mimeType, modifiedTime: img.modifiedTime, year: year.name, folder: sub.name });
+        if (candidates.length >= limit) break;
+      }
+    }
+  }
+  return candidates;
+}
+
 async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
   const speakers = normalizeEventSpeakers(event);
   if (!speakers.length) return [];
