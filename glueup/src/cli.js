@@ -436,6 +436,11 @@ async function populateDraft(args) {
     timezone: getConfig({ timezone: args.timezone }).timezone,
     headless: !args.headed
   });
+  const summaryPopulated = await populateEventSummaryViaSummaryPage({
+    eventId,
+    event,
+    headless: !args.headed
+  });
   manifest.status = "draft_populated";
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
@@ -443,6 +448,9 @@ async function populateDraft(args) {
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
   console.log(`Populated Glue Up draft ${eventId} from ${runDir}`);
+  if (!summaryPopulated) {
+    console.log("No event description in event.json; left the Glue Up summary unchanged.");
+  }
 }
 
 async function populateCampaigns(args) {
@@ -740,6 +748,112 @@ async function fillFirstVisible(page, selectors, value) {
     }
   }
   return false;
+}
+
+// Populates the event description into the Glue Up draft's content/summary page.
+// The summary `about` field is a Quill rich-text editor (div.ql-editor) saved via
+// the StandardForm action POST /events/<eventId>/publishing/content/summary/ajax.
+// Returns true when a description was written, false when event.description is empty.
+async function populateEventSummaryViaSummaryPage({ eventId, event, headless }) {
+  const html = descriptionToHtml(event?.description);
+  if (!html) return false;
+
+  const { chromium } = await import("playwright");
+  const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless,
+    viewport: { width: 1440, height: 1000 }
+  });
+  const page = context.pages()[0] || (await context.newPage());
+  try {
+    await page.goto(`https://ycp.glueup.com/events/${eventId}/publishing/content/summary/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.locator("div.ql-editor").first().waitFor({ state: "visible", timeout: 60_000 });
+
+    // Set the Quill content via its API when available (keeps the editor model in
+    // sync), falling back to writing the editor DOM and firing an input event.
+    await page.evaluate((value) => {
+      const editor = document.querySelector("div.ql-editor");
+      if (!editor) return;
+      const container = editor.closest(".ql-container");
+      const quill = window.Quill && container && typeof window.Quill.find === "function"
+        ? window.Quill.find(container)
+        : null;
+      if (quill && quill.clipboard && typeof quill.clipboard.dangerouslyPasteHTML === "function") {
+        quill.setText("");
+        quill.clipboard.dangerouslyPasteHTML(0, value);
+      } else {
+        editor.innerHTML = value;
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }, html);
+
+    const responsePromise = page
+      .waitForResponse((response) =>
+        response.url().includes(`/events/${eventId}/publishing/content/summary/ajax`) &&
+        response.request().method() === "POST"
+      )
+      .catch(() => null);
+    await page.locator('button.save-button, [data-event="StandardForm::submit"]').first().click();
+    const response = await responsePromise;
+    if (response && !response.ok()) {
+      throw new Error(`Glue Up summary save failed ${response.status()}.`);
+    }
+    await page.waitForTimeout(1_000);
+
+    // The save response is an empty text/html body, so confirm persistence by
+    // reloading: the injected text lingers in the DOM whether or not the save
+    // took, but a fresh page only shows what Glue Up stored server-side.
+    await page.goto(`https://ycp.glueup.com/events/${eventId}/publishing/content/summary/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.locator("div.ql-editor").first().waitFor({ state: "visible", timeout: 60_000 });
+    const saved = await page.locator("div.ql-editor").first().innerText().catch(() => "");
+    const expected = stripHtml(html);
+    const probe = expected.slice(0, 40);
+    if (!saved.replace(/\s+/g, " ").includes(probe.replace(/\s+/g, " "))) {
+      throw new Error("Glue Up summary save did not persist the event description.");
+    }
+    return true;
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+// Converts plain-text description (blank-line separated) into the paragraph HTML
+// the Glue Up Quill editor stores in the summary `about` field.
+function descriptionToHtml(description) {
+  const text = typeof description === "string" ? description.trim() : "";
+  if (!text) return "";
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Plain text of the description HTML, for comparing against the reloaded editor.
+function stripHtml(html) {
+  return String(html)
+    .replace(/<\/(p|div|br)>/gi, " ")
+    .replace(/<br\s*\/?>(?=)/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function mergeCampaigns(existing, created) {

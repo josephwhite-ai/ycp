@@ -35,10 +35,16 @@ Current baseline:
 
 ## Todo: Event Draft Fields Not Yet Populated
 
-- [ ] Event description / summary
+- [x] Event description / summary (implemented in `populateEventSummaryViaSummaryPage`)
   - Source: `event.description`, from sheet keys `description`, `overview`, or `summary`
   - Also appears in generated `webpage.md`
-  - Need to populate the event page body/overview section in the approved Glue Up template.
+  - Populates the event page body/overview (`about`) section in the approved Glue Up template.
+  - Confirmed UI: `/events/<eventId>/publishing/content/summary/`, separate from settings/general and from venue.
+  - Confirmed save endpoint: `/events/<eventId>/publishing/content/summary/ajax`, action `StandardFormSubmit`.
+  - Confirmed `StandardFormSubmit` payload: envelope fields `action`, `token`, `orgID`, `currentPath`, plus `language` (e.g. `en`), `about`, and `submit: "save"`.
+  - Field is named `about` and is rich-text HTML: the editor stores `<p style="text-align: center;">…</p>`, so plain-text `event.description` must be wrapped into `<p>` HTML before saving.
+  - Response is JSON `{ code: 200, data.value.about, data.errors: [] }`, so the save is verifiable from `data.value.about` / empty `data.errors`.
+  - The summary editor is a contenteditable widget (probe `forms: []` was empty), so replaying the AJAX with `token`/`orgID`/`currentPath` read from the page is more robust than driving the rich-text DOM.
 
 - [ ] Speaker names and speaker details
   - Source: `event.rawFields["speaker (if applicable)"]`
