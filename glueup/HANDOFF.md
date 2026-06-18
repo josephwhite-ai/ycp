@@ -42,6 +42,7 @@ Current baseline:
   - Payload: envelope `action`/`token`/`orgID`/`currentPath`, plus `data` with `id:""`, `firstName`, `lastName`, `position`, `company`, `email`, `website`, `description`, `order.code:"-1"`, and a default-profile `image` object.
   - Parses newline/semicolon-delimited entries, skips `TBD`, splits names into `firstName`/`lastName`, and maps comma- or hyphen-delimited details into `position`/`company`.
   - Existing speakers are skipped by name (idempotent re-runs).
+  - Headshots: `prepare` (in CI, where Drive creds exist) finds the event's speaker/bio subfolder, pulls each speaker's photo (the first inline image of their "Photo and Bio" Google Doc, or a plain image file) into `speaker-photos/` + `speaker-photos.json`. `populate` then uploads the matched headshot via the `UploadImageButton` flow (`POST /upload/images` with `files[]`/`token`/`orgID`/`currentPath`/`returnUrl`/`type`, then `?isCrop=true` for a centered square) and uses the resulting image object in `create-manual-speaker`; speakers without a photo keep the default avatar.
   - Can be run alone with `npm run populate-speakers -- --event <index>` for repair/debug.
 - [x] Event description / summary (implemented in `populateEventSummaryViaSummaryPage`)
   - Source: `event.description`, from sheet keys `description`, `overview`, or `summary`

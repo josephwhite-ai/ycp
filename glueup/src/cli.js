@@ -40,6 +40,10 @@ const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
 const ARTIFACT_PREFIX = "glueup-run-";
 const DEFAULT_REUSE_ARTIFACT_LIMIT = 20;
 const CURRENT_RUN_FILE = ".glueup-current-run";
+// Declared before the top-level dispatch below so dispatched functions don't hit
+// a temporal-dead-zone error referencing them mid module-evaluation.
+const SPEAKER_FOLDER_RE = /speaker|bio|pic|photo|headshot|presenter|profile/i;
+const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -117,6 +121,10 @@ async function prepare(args) {
     drive.listImagesRecursive(eventFolder.id)
   ]);
   const event = extractEventFromGoogleDoc(doc);
+  const speakerPhotos = await gatherSpeakerPhotos({ drive, eventFolder, event, runDir }).catch((error) => {
+    console.log(`Speaker photo gathering failed (non-fatal): ${error.message}`);
+    return [];
+  });
   const artifacts = await generateArtifacts({ event, photos, config });
   const validation = validateEventRun({ event, artifacts, config });
 
@@ -136,6 +144,7 @@ async function prepare(args) {
   await writeJson(join(runDir, "manifest.json"), manifest);
   await writeJson(join(runDir, "event.json"), event);
   await writeJson(join(runDir, "photos.json"), photos);
+  await writeJson(join(runDir, "speaker-photos.json"), speakerPhotos);
   await writeJson(join(runDir, "template-selection.json"), selectEventTemplate(event));
   await writeJson(join(runDir, "photo-recommendations.json"), artifacts.photoRecommendations || []);
   await writeFile(join(runDir, "webpage.md"), artifacts.webpage || "", "utf8");
@@ -149,6 +158,118 @@ async function prepare(args) {
 
   console.log(`Prepared event ${eventInfo.index} (${monthInfo.monthName} ${monthInfo.year}) in ${runDir}`);
   console.log(`Validation: ${validation.ok ? "OK" : "needs attention"}`);
+}
+
+// Downloads a headshot for each parsed speaker from the event's speaker/bio
+// subfolder and writes it into the run's speaker-photos/ directory. Headshots are
+// usually embedded in a per-speaker Google Doc ("… Photo and Bio"); plain image
+// files are also supported. Speakers with no matching photo are skipped (partial
+// coverage is expected). Returns [{ fullName, firstName, lastName, position,
+// company, photoFile }] for matched speakers; photoFile is relative to runDir.
+async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
+  const speakers = normalizeEventSpeakers(event);
+  if (!speakers.length) return [];
+
+  const subfolders = (await drive.listChildren(eventFolder.id)).filter((f) =>
+    f.mimeType?.includes("folder")
+  );
+  const speakerFolder = subfolders.find((f) => SPEAKER_FOLDER_RE.test(f.name));
+  if (!speakerFolder) {
+    console.log("No speaker/bio subfolder found in the event folder; skipping speaker photos.");
+    return [];
+  }
+
+  const files = await drive.listChildren(speakerFolder.id);
+  const outDir = join(runDir, "speaker-photos");
+  await mkdir(outDir, { recursive: true });
+
+  const results = [];
+  for (const speaker of speakers) {
+    const file = matchSpeakerFile(files, speaker);
+    if (!file) {
+      console.log(`No photo file matched for speaker "${speaker.fullName}".`);
+      continue;
+    }
+    const image = await extractSpeakerImage(drive, file).catch((error) => {
+      console.log(`Could not extract photo for "${speaker.fullName}": ${error.message}`);
+      return null;
+    });
+    if (!image) continue;
+
+    const photoFile = join("speaker-photos", `${slugify(speaker.fullName)}.${image.ext}`);
+    await writeFile(join(runDir, photoFile), image.bytes);
+    results.push({
+      fullName: speaker.fullName,
+      firstName: speaker.firstName,
+      lastName: speaker.lastName,
+      position: speaker.position,
+      company: speaker.company,
+      photoFile,
+      source: file.name
+    });
+    console.log(`Saved speaker photo: ${speaker.fullName} -> ${photoFile} (from "${file.name}")`);
+  }
+  return results;
+}
+
+// Finds the file in the speaker folder that best matches a speaker, by last name
+// then first name (case/space-insensitive). Prefers Docs/images over other types.
+function matchSpeakerFile(files, speaker) {
+  const candidates = files.filter((f) => {
+    const name = f.name.toLowerCase();
+    return (
+      (speaker.lastName && name.includes(speaker.lastName.toLowerCase())) ||
+      (speaker.firstName && name.includes(speaker.firstName.toLowerCase()))
+    );
+  });
+  const rank = (f) =>
+    f.mimeType === "application/vnd.google-apps.document" ? 0 : f.mimeType?.startsWith("image/") ? 1 : 2;
+  return candidates.sort((a, b) => rank(a) - rank(b))[0] || null;
+}
+
+// Pulls image bytes from a matched file: the first inline image of a Google Doc,
+// or the raw bytes of an image file. The extension is sniffed from the bytes
+// (a Doc's inline image is often JPEG regardless of name). Returns { bytes, ext }.
+async function extractSpeakerImage(drive, file) {
+  let bytes = null;
+  if (file.mimeType === "application/vnd.google-apps.document") {
+    const doc = await drive.getGoogleDoc(file.id);
+    const uri = firstDocInlineImageUri(doc);
+    if (!uri) return null;
+    bytes = await drive.downloadContentUri(uri);
+  } else if (file.mimeType?.startsWith("image/")) {
+    bytes = await drive.downloadFile(file.id);
+  } else {
+    return null;
+  }
+  return { bytes, ext: sniffImageExt(bytes) };
+}
+
+function firstDocInlineImageUri(doc) {
+  const objects = doc?.inlineObjects || {};
+  for (const id of Object.keys(objects)) {
+    const props = objects[id]?.inlineObjectProperties?.embeddedObject?.imageProperties;
+    if (props?.contentUri) return props.contentUri;
+  }
+  return null;
+}
+
+// Detects the image type from magic bytes (more reliable than the source name).
+function sniffImageExt(bytes) {
+  if (!bytes || bytes.length < 12) return "img";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
+  if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "webp";
+  const head = bytes.toString("ascii", 0, 6);
+  if (head === "GIF87a" || head === "GIF89a") return "gif";
+  return "img";
+}
+
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "speaker";
 }
 
 async function validate(args) {
@@ -550,10 +671,19 @@ async function populateSpeakers(args, options = {}) {
     return null;
   }
 
+  // Attach any headshot gathered by prepare (speaker-photos.json) so the upload
+  // step can replace the default avatar.
+  const photoEntries = await readJson(join(runDir, "speaker-photos.json")).catch(() => []);
+  const photoByName = new Map((photoEntries || []).map((p) => [p.fullName, p.photoFile]));
+  const speakersWithPhotos = speakers.map((speaker) => ({
+    ...speaker,
+    photoPath: photoByName.has(speaker.fullName) ? join(runDir, photoByName.get(speaker.fullName)) : null
+  }));
+
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   const populated = await populateEventSpeakersViaAjax({
     eventId,
-    speakers,
+    speakers: speakersWithPhotos,
     cookie: auth.cookie,
     csrfToken: auth.csrfToken,
     orgId: auth.orgId
@@ -939,10 +1069,8 @@ async function populateEventVenueViaAjax({ eventId, event, cookie, csrfToken, or
 
 // Adds each speaker to the draft via the speakers page's `create-manual-speaker`
 // AJAX action (the same action the "add manually" UI fires). Existing speakers are
-// skipped by name so re-runs stay idempotent. The default profile image mirrors what
-// the Glue Up UI sends for a manually-created speaker with no photo.
-const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
-
+// skipped by name so re-runs stay idempotent. The default profile image (declared
+// near the top) mirrors what the Glue Up UI sends for a speaker with no photo.
 async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfToken, orgId }) {
   if (!speakers.length) return [];
   const currentPath = `/events/${eventId}/publishing/content/speakers/`;
@@ -956,6 +1084,25 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
       populated.push({ ...speaker, skipped: true });
       continue;
     }
+    let image = {
+      uri: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI,
+      originalUri: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI,
+      styleString: `background-image: url( ${GLUEUP_DEFAULT_SPEAKER_IMAGE_URI} );`,
+      html: { src: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI }
+    };
+    if (speaker.photoPath) {
+      const uploaded = await uploadGlueUpSpeakerImage({
+        photoPath: speaker.photoPath,
+        cookie,
+        csrfToken: pageCsrfToken,
+        orgId,
+        currentPath
+      }).catch((error) => {
+        console.log(`Speaker photo upload failed for ${speaker.fullName} (using default): ${error.message}`);
+        return null;
+      });
+      if (uploaded) image = uploaded;
+    }
     const data = {
       id: "",
       email: "",
@@ -966,12 +1113,7 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
       position: speaker.position || "",
       lastName: speaker.lastName || "",
       firstName: speaker.firstName || "",
-      image: {
-        uri: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI,
-        originalUri: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI,
-        styleString: `background-image: url( ${GLUEUP_DEFAULT_SPEAKER_IMAGE_URI} );`,
-        html: { src: GLUEUP_DEFAULT_SPEAKER_IMAGE_URI }
-      }
+      image
     };
     await postGlueUpAjax({
       path: `/events/${eventId}/publishing/content/speakers/ajax`,
@@ -987,6 +1129,100 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
     populated.push(speaker);
   }
   return populated;
+}
+
+// Uploads a speaker headshot and returns the cropped square image object for the
+// create-manual-speaker payload, replaying the UploadImageButton flow: POST
+// /upload/images (files[] + token/orgID/currentPath/returnUrl/type) then
+// POST /upload/images?isCrop=true with a centered-square crop box.
+async function uploadGlueUpSpeakerImage({ photoPath, cookie, csrfToken, orgId, currentPath }) {
+  const bytes = await readFile(photoPath);
+  const ext = sniffImageExt(bytes);
+  const mime = { jpg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" }[ext] || "image/jpeg";
+  const fileName = `headshot.${ext}`;
+
+  const form = new FormData();
+  form.append("files[]", new Blob([bytes], { type: mime }), fileName);
+  form.append("token", csrfToken);
+  form.append("orgID", String(orgId));
+  form.append("currentPath", currentPath);
+  form.append("returnUrl", "");
+  form.append("type", "square");
+  const uploadJson = await postGlueUpUpload({ path: "/upload/images", body: form, cookie, currentPath });
+  const uuid = Object.values(uploadJson.data.value)[0]?.id;
+  if (!uuid) throw new Error("upload returned no image id");
+
+  const dims = imageDimensions(bytes) || { width: 600, height: 600 };
+  const side = Math.min(dims.width, dims.height);
+  const cropData = {
+    id: null,
+    "ImageCropper.uri": `/resources/public/images/orig/${uuid}.${ext}`,
+    "ImageCropper.dimensions": {
+      x: Math.floor((dims.width - side) / 2),
+      y: Math.floor((dims.height - side) / 2),
+      width: side,
+      height: side
+    },
+    extension: ext,
+    fileName,
+    fileType: mime,
+    type: "square"
+  };
+  const cropJson = await postGlueUpUpload({
+    path: "/upload/images?isCrop=true",
+    body: new URLSearchParams({
+      action: "cropImage",
+      data: JSON.stringify(cropData),
+      token: csrfToken,
+      orgID: String(orgId),
+      currentPath
+    }).toString(),
+    cookie,
+    currentPath,
+    urlencoded: true
+  });
+  return cropJson.data.value;
+}
+
+async function postGlueUpUpload({ path, body, cookie, currentPath, urlencoded = false }) {
+  const headers = {
+    cookie,
+    accept: "application/json, text/javascript, */*; q=0.01",
+    "x-requested-with": "XMLHttpRequest",
+    referer: `${GLUEUP_BASE_URL}${currentPath}`
+  };
+  if (urlencoded) headers["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8";
+  const response = await fetch(`${GLUEUP_BASE_URL}${path}`, { method: "POST", headers, body });
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`Glue Up upload ${path} returned non-JSON: ${text.slice(0, 120)}`);
+  }
+  if (json.code !== 201) {
+    throw new Error(`Glue Up upload ${path} failed (code ${json.code}): ${JSON.stringify(json.data?.errors || [])}`);
+  }
+  return json;
+}
+
+// Reads pixel dimensions from JPEG or PNG bytes (for the centered-square crop box).
+function imageDimensions(bytes) {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let i = 2;
+    while (i < bytes.length) {
+      if (bytes[i] !== 0xff) { i += 1; continue; }
+      const marker = bytes[i + 1];
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { height: bytes.readUInt16BE(i + 5), width: bytes.readUInt16BE(i + 7) };
+      }
+      i += 2 + bytes.readUInt16BE(i + 2);
+    }
+  }
+  return null;
 }
 
 // Parses the raw speaker field into structured entries, dropping TBD placeholders.
