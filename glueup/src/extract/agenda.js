@@ -53,6 +53,15 @@ export function parseEventAgenda(timeText) {
 
     rows.push({ startTime, endTime, label, internal });
   }
+
+  // Sandwich structure: in a multi-row agenda the first and last rows are always
+  // internal (leadership setup/cleanup) and everything between them is public.
+  // Requires 3+ rows so a single overall time range or a two-item list is never
+  // hollowed out; the tag/keyword detection above still covers those shorter cases.
+  if (rows.length >= 3) {
+    rows[0].internal = true;
+    rows[rows.length - 1].internal = true;
+  }
   return rows;
 }
 
