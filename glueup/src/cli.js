@@ -13,7 +13,7 @@ import {
 } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
-import { selectPublicAgenda, formatAgendaRange } from "./extract/agenda.js";
+import { parseEventAgenda, selectPublicAgenda, formatAgendaRange } from "./extract/agenda.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
@@ -1443,7 +1443,14 @@ async function populateEventBannerViaDesignPage({ eventId, bannerPath, cookie, c
 // Each row renders as its time range plus any label; internal setup/cleanup rows
 // are already excluded by selectPublicAgenda.
 function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
-  const rows = selectPublicAgenda(event?.agenda || []);
+  // `event.agenda` is only set at extraction time, and normalizeEventFields does
+  // not backfill it, so derive the agenda from the raw "time" field when missing
+  // (e.g. older run artifacts). This keeps the schedule block populated.
+  const agenda =
+    Array.isArray(event?.agenda) && event.agenda.length
+      ? event.agenda
+      : parseEventAgenda(rawEventField(event, ["time", "schedule", "agenda", "run of show"]));
+  const rows = selectPublicAgenda(agenda);
   const parts = [];
   if (rows.length) {
     parts.push("<p><strong>Schedule</strong></p>");
@@ -1482,6 +1489,26 @@ async function populateEventPageContentViaDesignPage({ eventId, event, cookie, c
   });
   const blocks = payload?.data?.value?.content?.length || 0;
   console.log(`Populated event page content (${blocks} blocks; schedule ${scheduleHtml ? "set" : "skipped"})`);
+
+  // Sections default to hidden on the public page even when their content is
+  // populated, so explicitly enable the ones we filled. The toggle is the design
+  // page's `updateVisibility` action with { active:"true", id:<section> }.
+  const sectionsToEnable = [];
+  if (normalizeEventSpeakers(event).length) sectionsToEnable.push("speakers");
+  if (event?.venue) sectionsToEnable.push("venue");
+  for (const id of sectionsToEnable) {
+    await postGlueUpAjax({
+      path: `/events/${eventId}/publishing/website/design/ajax`,
+      currentPath,
+      refererPath: currentPath,
+      action: "updateVisibility",
+      data: { active: "true", id },
+      cookie,
+      csrfToken: pageCsrf,
+      orgId
+    });
+  }
+  if (sectionsToEnable.length) console.log(`Enabled page sections: ${sectionsToEnable.join(", ")}`);
   return payload?.data?.value || null;
 }
 
