@@ -1484,11 +1484,15 @@ function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
     Array.isArray(event?.agenda) && event.agenda.length
       ? event.agenda
       : parseEventAgenda(rawEventField(event, ["time", "schedule", "agenda", "run of show"]));
-  // If the event summary/description already embeds a schedule (as some past
-  // events do), don't add our own schedule rows — that would restate it twice.
-  const rows = descriptionHasSchedule(event) ? [] : selectPublicAgenda(agenda);
+  const rows = selectPublicAgenda(agenda);
+  // A full "Schedule" section only earns its place when there's a real
+  // multi-row run-of-show. For a single overall time ("7-9PM"), a Schedule
+  // heading just restates the time, so use a compact emoji where/when block
+  // instead. If the summary already embeds a schedule, never add our own rows.
+  const isMultiline = rows.length >= 2 && !descriptionHasSchedule(event);
+
   const parts = [];
-  if (rows.length) {
+  if (isMultiline) {
     parts.push("<p><strong>Schedule</strong></p>");
     for (const row of rows) {
       const range = formatAgendaRange(row);
@@ -1496,9 +1500,56 @@ function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
       const label = row.label ? `&nbsp;&ndash;&nbsp;${escapeHtml(row.label)}` : "";
       parts.push(`<p><strong>${range}</strong>${label}</p>`);
     }
+  } else {
+    const whereWhen = buildEventWhereWhenHtml(event, rows);
+    if (whereWhen) parts.push(whereWhen);
   }
   if (includeJoinBlurb) parts.push(YCP_JOIN_BLURB);
   return parts.join("");
+}
+
+// Compact "where/when" block for events without a multi-row schedule, e.g.:
+//   📅 July 31 | 7:00–9:00 PM
+//   📍 St. Thomas the Apostle – West Hartford, CT
+function buildEventWhereWhenHtml(event, rows = []) {
+  const parts = [];
+  const date = formatEventDate(event?.eventDate);
+  const range = rows.length
+    ? formatAgendaRange({ startTime: rows[0].startTime, endTime: rows[rows.length - 1].endTime })
+    : "";
+  const when = [date, range].filter(Boolean).join(" | ");
+  if (when) parts.push(`<p>📅 ${escapeHtml(when)}</p>`);
+  const where = buildEventVenueLine(event);
+  if (where) parts.push(`<p>📍 ${where}</p>`);
+  return parts.join("");
+}
+
+// "Venue Name – City, ST" from the event venue/address text, falling back to
+// just the name when no city/state line is present.
+function buildEventVenueLine(event) {
+  const venue = normalizeEventVenue(event);
+  if (!venue.name) return "";
+  let locale = "";
+  for (const line of String(venue.full || "").split(/\n+/)) {
+    const match = /^(.+?),?\s+([A-Z]{2})\s+\d{5}/.exec(line.trim());
+    if (match) {
+      locale = `${match[1].replace(/,$/, "").trim()}, ${match[2]}`;
+      break;
+    }
+  }
+  if (!locale && venue.city) locale = venue.city;
+  return locale ? `${escapeHtml(venue.name)} &ndash; ${escapeHtml(locale)}` : escapeHtml(venue.name);
+}
+
+// "2026-07-31" -> "July 31".
+function formatEventDate(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!match) return "";
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  return `${months[Number(match[2]) - 1]} ${Number(match[3])}`;
 }
 
 // Writes the public event page content blocks via `publicPageSubmit`. Requires
