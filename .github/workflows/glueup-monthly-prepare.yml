@@ -11,6 +11,10 @@ on:
         description: Year of the event. Defaults to the current UTC year.
         required: false
         default: ""
+      additional_speaker:
+        description: Optional prepare-only speaker entry (Name, Position - Company).
+        required: false
+        default: ""
 
 jobs:
   prepare:
@@ -71,11 +75,16 @@ jobs:
           TIMEZONE: America/New_York
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_CSE_API_KEY: ${{ secrets.GOOGLE_CSE_API_KEY }}
-          GOOGLE_CSE_CX: ${{ secrets.GOOGLE_CSE_CX }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           EVENT: ${{ steps.event.outputs.event }}
           YEAR: ${{ steps.event.outputs.year }}
-        run: npm run monthly-prepare -- --event "$EVENT" --year "$YEAR"
+          ADDITIONAL_SPEAKER: ${{ github.event.inputs.additional_speaker }}
+        run: |
+          ARGS=(--event "$EVENT" --year "$YEAR")
+          if [ -n "$ADDITIONAL_SPEAKER" ]; then
+            ARGS+=(--additional-speaker "$ADDITIONAL_SPEAKER")
+          fi
+          npm run monthly-prepare -- "${ARGS[@]}"
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
