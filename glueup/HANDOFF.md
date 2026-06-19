@@ -68,10 +68,14 @@ Current baseline:
   - Prepare treats a missing registration URL as a warning because Glue Up creates the event URL after draft creation.
   - Need to decide whether an existing registration URL from the sheet should ever be written into Glue Up, or whether Glue Up's generated `manifest.glueUp.eventUrl` should be written back only to local artifacts.
 
-- [ ] Recommended hero/event images
-  - Source: `photos.json` and `photo-recommendations.json`, generated from images in the Drive event folder
-  - Current `populate` does not upload or select images in the Glue Up draft.
-  - Need to map approved template image slots, decide which recommended image becomes the hero/banner, and implement upload/selection.
+- [~] Event banner image (in progress — paused after Stage 1)
+  - Goal: pick a relevant, recent photo from the shared "photo library" drive and set it as the Glue Up event banner.
+  - Source drive: `GLUEUP_PHOTO_LIBRARY_FOLDER_ID` (default `0APt58RkpagPZUk9PVA`), a shared drive organized as `/<YEAR>/<event-or-date subfolder>/images`. Root also has utility folders to skip (`PDF Split Pages`, `Photo Organizer`, `EventData`, `Ads`, `Receipts`). The CI service account (`sheets@gen-lang-client-0848431620.iam.gserviceaccount.com`) has been granted access.
+  - Most images are `.HEIC`/`.heif` (iPhone); some are designed graphics (PNG/JPEG). Listing a shared-drive root needs `corpora=drive&driveId=...` (see `listChildren({ driveId })`).
+  - Decisions: rank candidates by **AI vision** (OpenAI, `detail: low`); **convert HEIC→JPEG** in CI via a `heic-convert` dependency (requires adding an `npm install`/`npm ci` step to `.github/workflows/glueup-monthly-prepare.yml`, which currently installs nothing — set `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so the playwright dep doesn't pull browsers).
+  - Stage 1 DONE: `gatherBannerCandidates(drive)` walks most-recent year → recent subfolders → newest images (cap `BANNER_CANDIDATE_LIMIT`); verified in CI on event 7 (returns the World Cup ad PNG/JPEG + recent April HEIC photos). Currently only logs candidates in `prepare` (the `bannerCandidates` block) — does not yet convert/rank/download.
+  - Remaining: (2) HEIC→JPEG conversion + dep/workflow; (3) AI-vision ranking → pick one; (4) download + save banner to the run artifact (e.g. `banner.jpg` + `banner.json`); (5) Glue Up upload — the banner almost certainly reuses the `/upload/images` flow already implemented for speakers (`uploadGlueUpSpeakerImage`/`postGlueUpUpload`); still need to probe where the event banner/cover is *set* (which publishing/content page + save action).
+  - The `event` photos in the Drive event folder (`photos.json`/`photo-recommendations.json`) are a separate, older signal and are not the banner source.
 
 - [ ] Webpage field brief
   - Source: `webpage.md`, generated from `event.json` and photos
