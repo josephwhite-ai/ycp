@@ -13,6 +13,7 @@
     "populate-speakers": "node src/cli.js populate-speakers",
     "populate-page": "node src/cli.js populate-page",
     "populate-banner": "node src/cli.js populate-banner",
+    "populate-campaigns": "node src/cli.js populate-campaigns",
     "finalize": "node src/cli.js finalize",
     "apply-campaign-setup": "node src/cli.js apply-campaign-setup",
     "mark-ignore": "node src/cli.js mark-ignore",

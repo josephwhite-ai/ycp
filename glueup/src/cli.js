@@ -93,6 +93,8 @@ try {
     await populatePageWorkflow(args);
   } else if (command === "populate-banner") {
     await populateBannerWorkflow(args);
+  } else if (command === "populate-campaigns") {
+    await populateCampaignsWorkflow(args);
   } else if (command === "finalize") {
     await finalizeWorkflow(args);
   } else if (command === "apply-campaign-setup") {
@@ -545,6 +547,13 @@ async function populateBannerWorkflow(args) {
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateBanner({ ...args, run: runDir });
+}
+
+async function populateCampaignsWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateCampaigns({ ...args, run: runDir });
 }
 
 async function ensureDraft(args, options = {}) {
@@ -2464,6 +2473,7 @@ Usage:
   npm run populate-summary # populate only the active draft description/summary
   npm run populate-speakers # populate only the active draft speakers
   npm run populate-banner  # populate only the active draft banner (needs banner.jpg in the run)
+  npm run populate-campaigns # populate only the active invitation campaigns
   npm run finalize         # schedule campaigns after manual review and publish
 
 Support/debug commands:
@@ -2477,6 +2487,7 @@ Support/debug commands:
   npm run populate-summary -- --event 6
   npm run populate-speakers -- --event 6
   npm run populate-banner -- --event 6
+  npm run populate-campaigns -- --event 6
 
 Options:
   --year YYYY        Defaults to the current year for ensure
