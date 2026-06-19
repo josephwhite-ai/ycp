@@ -18,6 +18,7 @@ import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
+import { proofreadEventContent } from "./validate/contentProofreader.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
 import {
@@ -168,7 +169,13 @@ async function prepare(args) {
     return null;
   });
   const artifacts = await generateArtifacts({ event, photos, config });
-  const validation = validateEventRun({ event, artifacts, config, speakerPhotos });
+  const contentReview = await proofreadEventContent({
+    event,
+    speakers: normalizeEventSpeakers(event),
+    artifacts,
+    config
+  });
+  const validation = validateEventRun({ event, artifacts, config, speakerPhotos, contentReview });
 
   const manifest = {
     preparedAt: new Date().toISOString(),
@@ -187,6 +194,7 @@ async function prepare(args) {
   await writeJson(join(runDir, "event.json"), event);
   await writeJson(join(runDir, "photos.json"), photos);
   await writeJson(join(runDir, "speaker-photos.json"), speakerPhotos);
+  await writeJson(join(runDir, "content-review.json"), contentReview);
   await writeJson(join(runDir, "template-selection.json"), selectEventTemplate(event));
   await writeJson(join(runDir, "photo-recommendations.json"), artifacts.photoRecommendations || []);
   await writeFile(join(runDir, "webpage.md"), artifacts.webpage || "", "utf8");
@@ -457,12 +465,13 @@ async function validate(args) {
   if (!runDir) throw new Error("Missing --run path.");
 
   const config = getConfig({ timezone: args.timezone });
-  const [event, webpage, weekBefore, dayBefore, speakerPhotos] = await Promise.all([
+  const [event, webpage, weekBefore, dayBefore, speakerPhotos, contentReview] = await Promise.all([
     readJson(join(runDir, "event.json")),
     readFile(join(runDir, "webpage.md"), "utf8"),
     readFile(join(runDir, "email-week-before.md"), "utf8"),
     readFile(join(runDir, "email-day-before.md"), "utf8"),
-    readJson(join(runDir, "speaker-photos.json")).catch(() => [])
+    readJson(join(runDir, "speaker-photos.json")).catch(() => []),
+    readJson(join(runDir, "content-review.json")).catch(() => null)
   ]);
 
   const validation = validateEventRun({
@@ -472,7 +481,8 @@ async function validate(args) {
       emails: { weekBefore, dayBefore }
     },
     config,
-    speakerPhotos
+    speakerPhotos,
+    contentReview
   });
 
   await writeFile(join(runDir, "validation-report.md"), validationReport(validation), "utf8");
@@ -482,6 +492,7 @@ async function validate(args) {
 
 async function ensureWorkflow(args) {
   const runDir = await prepareRunForDraft(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   const auth = args.dryRun ? null : await ensureGlueUpAuth({ headless: !args.headed });
   if (auth) printAuthNote(auth);
@@ -498,6 +509,7 @@ async function ensureWorkflow(args) {
 
 async function populateWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateDraft({ ...args, run: runDir });
@@ -510,12 +522,14 @@ async function populateWorkflow(args) {
 
 async function finalizeWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await scheduleCampaigns({ ...args, run: runDir });
 }
 
 async function populateVenueWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateVenue({ ...args, run: runDir });
@@ -523,6 +537,7 @@ async function populateVenueWorkflow(args) {
 
 async function populateSummaryWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateSummary({ ...args, run: runDir });
@@ -530,6 +545,7 @@ async function populateSummaryWorkflow(args) {
 
 async function populateSpeakersWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateSpeakers({ ...args, run: runDir });
@@ -537,6 +553,7 @@ async function populateSpeakersWorkflow(args) {
 
 async function populatePageWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populatePage({ ...args, run: runDir });
@@ -544,6 +561,7 @@ async function populatePageWorkflow(args) {
 
 async function populateBannerWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateBanner({ ...args, run: runDir });
@@ -551,9 +569,27 @@ async function populateBannerWorkflow(args) {
 
 async function populateCampaignsWorkflow(args) {
   const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateCampaigns({ ...args, run: runDir });
+}
+
+async function assertContentReviewPassed(runDir, args = {}) {
+  if (args.allowContentReviewIssues) return;
+  let review = null;
+  try {
+    review = JSON.parse(await readFile(join(runDir, "content-review.json"), "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const high = (review?.issues || []).filter((issue) => issue.confidence === "HIGH");
+  if (!high.length) return;
+  const details = high.map((issue) => `- ${issue.field}: "${issue.original}" -> "${issue.suggestion}"`).join("\n");
+  throw new Error(
+    `Content proofreading found high-confidence issues in ${runDir}:\n${details}\n` +
+    "Correct the source and prepare again, or pass --allow-content-review-issues after manual review."
+  );
 }
 
 async function ensureDraft(args, options = {}) {
@@ -2494,5 +2530,6 @@ Options:
   --dry-run          Write a plan without mutating Glue Up
   --headed           Open a visible browser for Glue Up page mutations
   --additional-speaker "Name, Position - Company"  Add a prepare-only speaker override
+  --allow-content-review-issues  Continue after manually reviewing proofreading errors
 `);
 }

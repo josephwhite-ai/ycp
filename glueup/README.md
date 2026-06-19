@@ -35,6 +35,7 @@ The current implementation:
 6. Lists likely photo assets.
 7. Generates local event-template field briefs and campaign-template fill briefs.
 8. Writes a validation report.
+9. Runs a conservative Gemini proofreading pass over public event fields, speaker details, and generated copy.
 9. Ensures a Glue Up event draft exists from the selected approved blueprint or from a reusable template-compatible draft.
 10. Ensures two invitation campaign drafts exist, one for the week-before send and one for the day-before send.
 11. Populates the existing draft and campaign records for the current month.
@@ -206,6 +207,12 @@ reasons and source URLs are recorded in `speaker-photos.json` and listed under
 **Speaker Image Review** in `validation-report.md`.
 
 The workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact named `glueup-run-evt-<year>-<index>`. Creating, publishing, or scheduling Glue Up objects does not happen in GitHub Actions.
+
+Prepare writes `content-review.json` and includes the results under **Content
+Proofreading** in `validation-report.md`. High-confidence likely typos mark the run
+as needing attention and block `ensure`, population, and campaign scheduling.
+Correct the source and prepare again; `--allow-content-review-issues` exists only
+for an operator who has manually reviewed and accepted a flagged phrase.
 
 ## Campaign creation
 

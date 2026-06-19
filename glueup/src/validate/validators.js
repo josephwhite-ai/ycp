@@ -2,7 +2,7 @@ import { selectEventTemplate } from "../templates/eventTypes.js";
 
 const REQUIRED_EVENT_FIELDS = ["eventName", "eventDate"];
 
-export function validateEventRun({ event, artifacts, config, speakerPhotos = [] }) {
+export function validateEventRun({ event, artifacts, config, speakerPhotos = [], contentReview = null }) {
   const errors = [];
   const warnings = [];
   const templateSelection = selectEventTemplate(event);
@@ -11,6 +11,7 @@ export function validateEventRun({ event, artifacts, config, speakerPhotos = [] 
       photo.sourceUrl ||
       /^(?:google|tavily)-image-search:/.test(String(photo.source || ""))
   );
+  const proofreadingIssues = contentReview?.issues || [];
 
   for (const field of REQUIRED_EVENT_FIELDS) {
     if (!event[field]) errors.push(`Missing required event field: ${field}`);
@@ -40,6 +41,15 @@ export function validateEventRun({ event, artifacts, config, speakerPhotos = [] 
   if (!artifacts?.webpage?.trim()) errors.push("Missing generated webpage draft.");
   if (!artifacts?.emails?.weekBefore?.trim()) errors.push("Missing week-before email draft.");
   if (!artifacts?.emails?.dayBefore?.trim()) errors.push("Missing day-before email draft.");
+
+  for (const issue of proofreadingIssues) {
+    const message = `Likely typo in ${issue.field}: "${issue.original}" -> "${issue.suggestion}" (${issue.reason})`;
+    if (issue.confidence === "HIGH") errors.push(message);
+    else warnings.push(message);
+  }
+  if (contentReview?.status === "skipped") {
+    warnings.push(`Automated proofreading was skipped: ${contentReview.reason}.`);
+  }
 
   for (const [name, content] of Object.entries({
     webpage: artifacts?.webpage || "",
@@ -76,7 +86,8 @@ export function validateEventRun({ event, artifacts, config, speakerPhotos = [] 
         }
       : null,
     templateSelection,
-    speakerImagesForReview
+    speakerImagesForReview,
+    contentReview
   };
 }
 
@@ -162,6 +173,20 @@ export function validationReport(validation) {
       lines.push(`- ${photo.fullName}: [source image](${sourceUrl}) (${photo.photoFile})${context}${reasons}`);
     }
     lines.push("");
+  }
+
+  if (validation.contentReview) {
+    lines.push("## Content Proofreading", "");
+    if (validation.contentReview.status === "skipped") {
+      lines.push(`Skipped: ${validation.contentReview.reason}`, "");
+    } else if (!validation.contentReview.issues?.length) {
+      lines.push("No likely typos detected.", "");
+    } else {
+      for (const issue of validation.contentReview.issues) {
+        lines.push(`- [${issue.confidence}] ${issue.field}: \`${issue.original}\` -> \`${issue.suggestion}\` — ${issue.reason}`);
+      }
+      lines.push("");
+    }
   }
 
   if (validation.errors.length) {

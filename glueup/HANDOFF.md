@@ -8,6 +8,11 @@ Current baseline:
 - `event.json` is produced from the Google Doc event summary sheet by `extractEventFromGoogleDoc`.
 - `populate` currently updates only the Glue Up draft's general settings for title, start/end date, start/end time, and timezone in `populateEventSettingsViaSettingsPage`.
 - Campaign setup/content is handled separately and is not the same as populating the Glue Up event draft page.
+- `prepare` runs a conservative Gemini proofreading pass over public event fields,
+  speaker details, and generated copy. It writes `content-review.json`, surfaces
+  findings in `validation-report.md`, and treats HIGH-confidence issues as errors.
+  Normal ensure/populate/finalize paths block on those issues unless an operator
+  explicitly passes `--allow-content-review-issues` after manual review.
 
 ## Already Populated By `populate`
 
