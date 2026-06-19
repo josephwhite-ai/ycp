@@ -127,7 +127,11 @@ export async function selectBannerCandidate({ drive, candidates, event, config }
   });
 
   if (!response.ok) {
-    throw new Error(`Gemini banner ranking failed ${response.status}: ${await response.text()}`);
+    // Degrade gracefully: a ranking outage (403/429/etc.) should fall back to a
+    // newest-candidate pick, not abort the whole banner step. Truncate the body so
+    // we never echo a long response into logs.
+    const body = (await response.text()).slice(0, 200);
+    return { chosen: null, reason: `Gemini ranking unavailable (${response.status}): ${body}`, ranking: [], skipped };
   }
   const payload = await response.json();
   const parsed = parseGeminiJson(payload);
