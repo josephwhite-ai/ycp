@@ -1493,9 +1493,11 @@ async function populateEventPageContentViaDesignPage({ eventId, event, cookie, c
   // Sections default to hidden on the public page even when their content is
   // populated, so explicitly enable the ones we filled. The toggle is the design
   // page's `updateVisibility` action with { active:"true", id:<section> }.
+  // Venue is intentionally left disabled: the venue already appears in the event
+  // sidebar, and restating it as a full page section is redundant (matches how
+  // past events were configured).
   const sectionsToEnable = [];
   if (normalizeEventSpeakers(event).length) sectionsToEnable.push("speakers");
-  if (event?.venue) sectionsToEnable.push("venue");
   for (const id of sectionsToEnable) {
     await postGlueUpAjax({
       path: `/events/${eventId}/publishing/website/design/ajax`,
