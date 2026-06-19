@@ -1303,8 +1303,18 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
 
   const populated = [];
   for (const speaker of speakers) {
-    if (pageHtml.includes(speaker.fullName)) {
+    const exists = pageHtml.includes(speaker.fullName);
+    const existingId = exists ? findExistingSpeakerId(pageHtml, speaker.fullName) : null;
+    // Existing speaker with no new photo to apply: nothing to do.
+    if (exists && !speaker.photoPath) {
       console.log(`Skipping existing speaker: ${speaker.fullName}`);
+      populated.push({ ...speaker, skipped: true });
+      continue;
+    }
+    // Existing speaker we want to give a photo, but we could not parse their id:
+    // skip rather than risk creating a duplicate.
+    if (exists && speaker.photoPath && !existingId) {
+      console.log(`Cannot update photo for existing speaker ${speaker.fullName}: id not found; skipping.`);
       populated.push({ ...speaker, skipped: true });
       continue;
     }
@@ -1328,7 +1338,7 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
       if (uploaded) image = uploaded;
     }
     const data = {
-      id: "",
+      id: existingId || "",
       email: "",
       order: { code: "-1" },
       description: speaker.description || "",
@@ -1339,6 +1349,8 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
       firstName: speaker.firstName || "",
       image
     };
+    // create-manual-speaker upserts by id: an empty id creates, an existing id
+    // updates (used to attach a photo to a speaker created in an earlier run).
     await postGlueUpAjax({
       path: `/events/${eventId}/publishing/content/speakers/ajax`,
       currentPath,
@@ -1349,10 +1361,20 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
       csrfToken: pageCsrfToken,
       orgId
     });
-    console.log(`Populated speaker: ${speaker.fullName}`);
+    console.log(`${existingId ? "Updated" : "Populated"} speaker: ${speaker.fullName}`);
     populated.push(speaker);
   }
   return populated;
+}
+
+// Parses an existing manual speaker's id from the speakers page. Each speaker
+// renders as <dd ... data-id="<24-hex>"><script type="application/json">{… "name":"<full name>" …}.
+function findExistingSpeakerId(html, fullName) {
+  const esc = fullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = html.match(
+    new RegExp(`data-id="([a-f0-9]{24})"[^>]*>\\s*<script[^>]*>\\{[^<]*?"name":"${esc}"`)
+  );
+  return match ? match[1] : null;
 }
 
 // Uploads a speaker headshot and returns the cropped square image object for the
@@ -1439,6 +1461,18 @@ async function populateEventBannerViaDesignPage({ eventId, bannerPath, cookie, c
 // followed by the blueprint's standard widgets. Posting blocks with empty ids
 // makes Glue Up mint fresh ids and replace the page content, so this is safe to
 // re-run and does not require reading the per-event block ids first.
+// Heuristic: does the event description already contain a schedule/run-of-show?
+// True when it names a schedule/agenda and includes a time, or simply lists two
+// or more clock times (e.g. "7:00 PM … 8:30 PM"). Used to avoid adding a second
+// schedule section that restates what the summary already says.
+function descriptionHasSchedule(event) {
+  const text = String(event?.description || "");
+  if (!text) return false;
+  const clockTimes = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi) || [];
+  if (clockTimes.length >= 2) return true;
+  return /\b(?:schedule|agenda|run of show)\b/i.test(text) && clockTimes.length >= 1;
+}
+
 // Builds the schedule HTML for block 1 from the event's public agenda rows.
 // Each row renders as its time range plus any label; internal setup/cleanup rows
 // are already excluded by selectPublicAgenda.
@@ -1450,7 +1484,9 @@ function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
     Array.isArray(event?.agenda) && event.agenda.length
       ? event.agenda
       : parseEventAgenda(rawEventField(event, ["time", "schedule", "agenda", "run of show"]));
-  const rows = selectPublicAgenda(agenda);
+  // If the event summary/description already embeds a schedule (as some past
+  // events do), don't add our own schedule rows — that would restate it twice.
+  const rows = descriptionHasSchedule(event) ? [] : selectPublicAgenda(agenda);
   const parts = [];
   if (rows.length) {
     parts.push("<p><strong>Schedule</strong></p>");
