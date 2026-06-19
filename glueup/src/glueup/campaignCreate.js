@@ -229,9 +229,25 @@ function eventPreheader(event) {
   return `Join us for ${title}.`;
 }
 
-export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign } = {}) {
+export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign, speakersHtml } = {}) {
   if (!eventId) throw new Error("Missing Glue Up event ID.");
   const title = event?.eventName || event?.sourceDocumentTitle || "Event";
+  // Email body blocks. The optional speakers block (built by the caller from the
+  // event's parsed speakers) is inserted after the event summary so invitees see
+  // who is presenting.
+  const contentBlocks = [
+    { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
+    { type: "detailsHeader" },
+    { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
+    { type: "summary" },
+    ...(speakersHtml ? [{ type: "html", value: speakersHtml }] : []),
+    { type: "rsvp" },
+    {
+      type: "sponsors",
+      "value.groups.6a3096bae4b07b64411cbe1b": true,
+      "value.showTitle": false
+    }
+  ];
   const payloads = [
     {
       action: "recipientFiltersStandardFormSubmit",
@@ -298,18 +314,7 @@ export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign } =
     {
       action: "ContentFormSubmit",
       data: {
-        blocks: [
-          { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
-          { type: "detailsHeader" },
-          { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
-          { type: "summary" },
-          { type: "rsvp" },
-          {
-            type: "sponsors",
-            "value.groups.6a3096bae4b07b64411cbe1b": true,
-            "value.showTitle": false
-          }
-        ],
+        blocks: contentBlocks,
         submit: "save_and_continue"
       }
     }

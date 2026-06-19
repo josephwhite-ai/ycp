@@ -56,6 +56,16 @@ Current baseline:
   - Response is JSON `{ code: 200, data.value.about, data.errors: [] }`, so the save is verifiable from `data.value.about` / empty `data.errors`.
   - The summary editor is a contenteditable widget (probe `forms: []` was empty), so replaying the AJAX with `token`/`orgID`/`currentPath` read from the page is more robust than driving the rich-text DOM.
 
+- [x] Public event page content blocks (implemented in `populateEventPageContentViaDesignPage`)
+  - The public event page (Website → Design "home" page) is an ordered array of content blocks saved via `publicPageSubmit` → `POST /events/<eventId>/publishing/website/pages/ajax`.
+  - `populate` now writes the page so it reads: block 0 `summary` (event details / description) → block 1 `html` (schedule built from `event.agenda` public rows via `buildEventScheduleHtml`, plus the standard YCP "Join us" CTA) → the blueprint widgets (`speakersWidget`, `agendaWidget`, `venueWidget`, `sponsorsWidget`, `exhibitorsWidget`, `ticketsWidget`, `directoryWidget`).
+  - **Key technique:** posting blocks with empty `id:""` makes Glue Up mint fresh ids and **replace** the whole page content (stays 9 blocks, no duplication), so we never need to read the per-event block ids first. Re-runnable.
+  - **Token gotcha:** the `publishing/website/*` endpoints reject the cookie CSRF token; they require the page-embedded token (reuse `fetchGlueUpPageCsrfToken`, same as the banner step). The cookie token still works for `/map/ajax`, venue, speakers, etc.
+  - Reordering the blocks programmatically was abandoned: the customizer keeps block state in an in-memory model inside a preview iframe that never appears in any HTTP response, and block ids are per-event. Overwriting the two content blocks (above) is the supported path instead.
+  - Can be run alone with `npm run populate-page -- --event <index>`.
+- [x] Speaker details in invitation campaigns
+  - `buildDefaultCampaignSetupPayloads` inserts a "Featured Speakers" `html` block (name — position, company, built by `buildCampaignSpeakersHtml`) after the `summary` block in the `ContentFormSubmit` email body. Applied to both the week-before and day-before campaigns.
+
 ## Todo: Event Draft Fields Not Yet Populated
 
 - [ ] Event type/program type details
@@ -90,10 +100,9 @@ Current baseline:
     - NOT yet end-to-end verified against a live draft (no real `banner.jpg` produced yet); test by dropping a placeholder `banner.jpg` into `runs/<run>/` and running `npm run populate-banner -- --event 7`.
   - The `event` photos in the Drive event folder (`photos.json`/`photo-recommendations.json`) are a separate, older signal and are not the banner source.
 
-- [ ] Webpage field brief
+- [~] Webpage field brief
   - Source: `webpage.md`, generated from `event.json` and photos
-  - Current `populate` does not read `webpage.md`.
-  - Need to translate the brief into specific Glue Up template fields/blocks instead of leaving it as an operator reference.
+  - `populate` does not read `webpage.md` directly, but the public page content it produces (summary + schedule blocks, see "Public event page content blocks" above) now covers the brief's main content. `webpage.md` remains an operator reference.
 
 - [ ] Agenda/session table rows
   - Source: `event.sessions`, when the Google Doc contains a non-key/value table
