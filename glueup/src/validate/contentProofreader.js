@@ -2,7 +2,7 @@ const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 // Reviews public-facing structured fields and generated copy for clear typos.
 // It reports issues but never rewrites source text automatically.
-export async function proofreadEventContent({ event, speakers = [], artifacts = {}, config = {} }) {
+export async function proofreadEventContent({ event, speakers = [], artifacts = {}, rendered = {}, config = {} }) {
   if (!config.geminiApiKey) {
     return { status: "skipped", reason: "GEMINI_API_KEY is not configured", issues: [] };
   }
@@ -15,7 +15,12 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
     speakers: speakers.map(({ fullName, position, company }) => ({ fullName, position, company })),
     webpage: String(artifacts.webpage || "").slice(0, 12_000),
     emailWeekBefore: String(artifacts.emails?.weekBefore || "").slice(0, 8_000),
-    emailDayBefore: String(artifacts.emails?.dayBefore || "").slice(0, 8_000)
+    emailDayBefore: String(artifacts.emails?.dayBefore || "").slice(0, 8_000),
+    // The actual published strings (tags stripped) so the review covers what
+    // populate transfers, not just the source fields and briefs.
+    publishedSummary: htmlToText(rendered.summaryHtml),
+    publishedSchedule: htmlToText(rendered.pageScheduleHtml),
+    publishedCampaignSpeakers: htmlToText(rendered.campaignSpeakersHtml)
   };
 
   try {
@@ -75,6 +80,19 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
   } catch (error) {
     return { status: "skipped", reason: error.message, issues: [] };
   }
+}
+
+// Strips HTML tags/entities so the proofreader reviews prose, not markup.
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ndash;/g, "–")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function validIssue(issue, sourceText) {
