@@ -10,6 +10,9 @@ const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/documents.readonly"
 ];
+// Scope for calling the Gemini (Generative Language) API with the same service
+// account. cloud-platform is the broadly-accepted OAuth scope for generateContent.
+export const GENAI_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"];
 
 export class GoogleDriveClient {
   constructor({ accessTokenProvider = defaultAccessTokenProvider } = {}) {
@@ -172,16 +175,24 @@ export class GoogleDriveClient {
 }
 
 export async function defaultAccessTokenProvider() {
+  return googleAccessToken(SCOPES);
+}
+
+// Mints a Google OAuth access token for the requested scopes. Service-account and
+// service-account ADC credentials can mint any scope (so the same key works for
+// both Drive and Gemini); a pre-supplied GOOGLE_ACCESS_TOKEN or user/gcloud login
+// carries whatever scopes it was granted, so `scopes` is best-effort there.
+export async function googleAccessToken(scopes = SCOPES) {
   if (process.env.GOOGLE_ACCESS_TOKEN) return process.env.GOOGLE_ACCESS_TOKEN;
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    return serviceAccountAccessToken(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+    return serviceAccountAccessToken(process.env.GOOGLE_APPLICATION_CREDENTIALS, scopes);
   }
 
   const adcPath =
     process.env.GOOGLE_APPLICATION_DEFAULT_CREDENTIALS ||
     join(process.env.HOME || "", ".config/gcloud/application_default_credentials.json");
   if (adcPath && existsSync(adcPath)) {
-    return applicationDefaultAccessToken(adcPath);
+    return applicationDefaultAccessToken(adcPath, scopes);
   }
 
   try {
@@ -196,10 +207,10 @@ export async function defaultAccessTokenProvider() {
   }
 }
 
-async function applicationDefaultAccessToken(credentialsPath) {
+async function applicationDefaultAccessToken(credentialsPath, scopes = SCOPES) {
   const credentials = JSON.parse(readFileSync(credentialsPath, "utf8"));
   if (credentials.type === "service_account") {
-    return serviceAccountAccessToken(credentialsPath);
+    return serviceAccountAccessToken(credentialsPath, scopes);
   }
   if (!credentials.refresh_token || !credentials.client_id || !credentials.client_secret) {
     throw new Error(`Application Default Credentials at ${credentialsPath} are not refreshable user credentials.`);
@@ -224,14 +235,14 @@ async function applicationDefaultAccessToken(credentialsPath) {
   return data.access_token;
 }
 
-async function serviceAccountAccessToken(credentialsPath) {
+async function serviceAccountAccessToken(credentialsPath, scopes = SCOPES) {
   const credentials = JSON.parse(readFileSync(credentialsPath, "utf8"));
   const now = Math.floor(Date.now() / 1000);
   const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const payload = base64Url(
     JSON.stringify({
       iss: credentials.client_email,
-      scope: SCOPES.join(" "),
+      scope: scopes.join(" "),
       aud: TOKEN_URL,
       iat: now,
       exp: now + 3600

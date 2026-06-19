@@ -11,6 +11,7 @@
     "populate-venue": "node src/cli.js populate-venue",
     "populate-summary": "node src/cli.js populate-summary",
     "populate-speakers": "node src/cli.js populate-speakers",
+    "populate-banner": "node src/cli.js populate-banner",
     "finalize": "node src/cli.js finalize",
     "apply-campaign-setup": "node src/cli.js apply-campaign-setup",
     "mark-ignore": "node src/cli.js mark-ignore",
@@ -18,9 +19,10 @@
     "glueup-login": "node src/cli.js glueup-login",
     "probe-event-setup": "node scripts/probe-event-setup.mjs",
     "probe-campaign": "node scripts/probe-campaign.mjs",
-    "check": "node --check src/cli.js && node --check src/config.js && node --check src/drive/googleDriveClient.js && node --check src/extract/docsTableExtractor.js && node --check src/extract/agenda.js && node --check src/generate/contentGenerator.js && node --check src/glueup/draftCreate.js && node --check src/glueup/campaignCreate.js && node --check src/glueup/session.js && node --check src/templates/eventTypes.js && node --check src/validate/validators.js && node --check scripts/lib/probeCore.mjs && node --check scripts/probe-event-setup.mjs && node --check scripts/probe-campaign.mjs"
+    "check": "node --check src/cli.js && node --check src/config.js && node --check src/drive/googleDriveClient.js && node --check src/extract/docsTableExtractor.js && node --check src/extract/agenda.js && node --check src/generate/contentGenerator.js && node --check src/generate/bannerSelector.js && node --check src/glueup/draftCreate.js && node --check src/glueup/campaignCreate.js && node --check src/glueup/session.js && node --check src/templates/eventTypes.js && node --check src/validate/validators.js && node --check scripts/lib/probeCore.mjs && node --check scripts/probe-event-setup.mjs && node --check scripts/probe-campaign.mjs"
   },
   "dependencies": {
+    "heic-convert": "^2.1.0",
     "playwright": "^1.53.0"
   },
   "engines": {
