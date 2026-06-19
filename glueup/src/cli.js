@@ -14,6 +14,7 @@ import {
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
+import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
@@ -67,6 +68,8 @@ try {
     await populateSummaryWorkflow(args);
   } else if (command === "populate-speakers") {
     await populateSpeakersWorkflow(args);
+  } else if (command === "populate-banner") {
+    await populateBannerWorkflow(args);
   } else if (command === "finalize") {
     await finalizeWorkflow(args);
   } else if (command === "apply-campaign-setup") {
@@ -135,6 +138,10 @@ async function prepare(args) {
   });
   console.log(`Banner candidates found: ${bannerCandidates.length}`);
   for (const c of bannerCandidates) console.log(`  ${c.year}/${c.folder}/${c.name} [${c.mimeType}] (${(c.modifiedTime || "").slice(0, 10)})`);
+  const banner = await prepareBannerImage({ drive, candidates: bannerCandidates, event, config, runDir }).catch((error) => {
+    console.log(`Banner selection failed (non-fatal): ${error.message}`);
+    return null;
+  });
   const artifacts = await generateArtifacts({ event, photos, config });
   const validation = validateEventRun({ event, artifacts, config });
 
@@ -195,16 +202,79 @@ async function gatherBannerCandidates(drive, { limit = BANNER_CANDIDATE_LIMIT } 
       .sort(byRecent);
     for (const sub of subfolders) {
       if (candidates.length >= limit) break;
-      const images = (await drive.listChildren(sub.id, { driveId }))
+      const images = (await drive.listChildren(sub.id, {
+        driveId,
+        fields: "nextPageToken, files(id, name, mimeType, modifiedTime, thumbnailLink)"
+      }))
         .filter((f) => f.mimeType?.startsWith("image/"))
         .sort(byRecent);
       for (const img of images) {
-        candidates.push({ id: img.id, name: img.name, mimeType: img.mimeType, modifiedTime: img.modifiedTime, year: year.name, folder: sub.name });
+        candidates.push({
+          id: img.id,
+          name: img.name,
+          mimeType: img.mimeType,
+          modifiedTime: img.modifiedTime,
+          thumbnailLink: img.thumbnailLink || "",
+          year: year.name,
+          folder: sub.name
+        });
         if (candidates.length >= limit) break;
       }
     }
   }
   return candidates;
+}
+
+// Picks one banner from the candidates via AI vision (ranking cheap Drive
+// thumbnails, never converting all of them), then downloads only the winner's
+// original and converts it to a web-ready JPEG. Writes banner.jpg + banner.json
+// into the run; populate's banner step uploads them later. Falls back to the
+// newest candidate when ranking is unavailable so a banner still gets produced.
+async function prepareBannerImage({ drive, candidates, event, config, runDir }) {
+  if (!candidates?.length) return null;
+
+  const selection = await selectBannerCandidate({ drive, candidates, event, config });
+  let chosen = selection.chosen;
+  if (chosen) {
+    console.log(`Banner chosen: ${chosen.year}/${chosen.folder}/${chosen.name} — ${selection.reason}`);
+  } else {
+    chosen = [...candidates].sort((a, b) => String(b.modifiedTime || "").localeCompare(String(a.modifiedTime || "")))[0];
+    console.log(`Banner: ${selection.reason}; falling back to newest candidate ${chosen.name}.`);
+  }
+
+  const original = await drive.downloadFile(chosen.id);
+  const { bytes, ext } = await toBannerImage(original, chosen);
+  const bannerFile = `banner.${ext}`;
+  await writeFile(join(runDir, bannerFile), bytes);
+
+  const meta = {
+    file: bannerFile,
+    sourceId: chosen.id,
+    sourceName: chosen.name,
+    sourceMimeType: chosen.mimeType,
+    folder: `${chosen.year}/${chosen.folder}`,
+    reason: selection.reason,
+    ranking: selection.ranking,
+    selectedAt: new Date().toISOString()
+  };
+  await writeJson(join(runDir, "banner.json"), meta);
+  console.log(`Saved banner -> ${join(runDir, bannerFile)} (${bytes.length} bytes)`);
+  return meta;
+}
+
+// Converts the chosen original to a web-ready banner. HEIC/HEIF iPhone photos are
+// converted to JPEG (heic-convert is loaded lazily, so prepare never pulls the
+// wasm decoder unless a HEIC actually wins); PNGs are kept; anything else is saved
+// as .jpg. resolveBannerPath accepts banner.jpg/.jpeg/.png.
+async function toBannerImage(bytes, candidate) {
+  const isHeic = /heic|heif/i.test(candidate.mimeType || "") || /\.(heic|heif)$/i.test(candidate.name || "");
+  if (isHeic) {
+    const heicConvert = (await import("heic-convert")).default;
+    const out = await heicConvert({ buffer: bytes, format: "JPEG", quality: 0.9 });
+    return { bytes: Buffer.from(out), ext: "jpg" };
+  }
+  if (/png/i.test(candidate.mimeType || "")) return { bytes, ext: "png" };
+  return { bytes, ext: "jpg" };
 }
 
 async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
@@ -392,6 +462,13 @@ async function populateSpeakersWorkflow(args) {
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateSpeakers({ ...args, run: runDir });
+}
+
+async function populateBannerWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateBanner({ ...args, run: runDir });
 }
 
 async function ensureDraft(args, options = {}) {
@@ -628,13 +705,15 @@ async function populateDraft(args) {
   const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId });
   const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
   const speakersResult = await populateSpeakers({ ...args, run: runDir }, { manifest, event, eventId });
+  const bannerResult = await populateBanner({ ...args, run: runDir }, { manifest, eventId });
   manifest.status = "draft_populated";
   manifest.glueUp = {
     ...(manifest.glueUp || {}),
     draftPopulatedAt: new Date().toISOString(),
     ...(summaryResult ? { summaryPopulatedAt: summaryResult.populatedAt } : {}),
     ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {}),
-    ...(speakersResult ? { speakersPopulatedAt: speakersResult.populatedAt, speakers: speakersResult.speakers } : {})
+    ...(speakersResult ? { speakersPopulatedAt: speakersResult.populatedAt, speakers: speakersResult.speakers } : {}),
+    ...(bannerResult ? { bannerPopulatedAt: bannerResult.populatedAt, banner: bannerResult.banner } : {})
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
   console.log(`Populated Glue Up draft ${eventId} from ${runDir}`);
@@ -742,6 +821,52 @@ async function populateSpeakers(args, options = {}) {
     await writeJson(join(runDir, "manifest.json"), manifest);
   }
   return { populatedAt, speakers: populated };
+}
+
+async function populateBanner(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  const bannerPath = resolveBannerPath(runDir);
+  if (!bannerPath) {
+    console.log("Skipping banner populate: no banner image in run artifact (expected banner.jpg).");
+    return null;
+  }
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const value = await populateEventBannerViaDesignPage({
+    eventId,
+    bannerPath,
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    orgId: auth.orgId
+  });
+  if (!value) return null;
+
+  const populatedAt = new Date().toISOString();
+  const banner = { id: value.id, uri: value.uri };
+  if (!options.manifest) {
+    manifest.status = "banner_populated";
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      bannerPopulatedAt: populatedAt,
+      banner
+    };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt, banner };
+}
+
+// Locates the banner image saved into the run artifact (produced by the prepare
+// HEIC-convert/AI-rank pipeline, or dropped in manually for testing).
+function resolveBannerPath(runDir) {
+  for (const name of ["banner.jpg", "banner.jpeg", "banner.png"]) {
+    const candidate = join(runDir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 async function populateCampaigns(args) {
@@ -1223,6 +1348,69 @@ async function uploadGlueUpSpeakerImage({ photoPath, cookie, csrfToken, orgId, c
     urlencoded: true
   });
   return cropJson.data.value;
+}
+
+// Sets the event banner ("headerImage") on the Website > Design customizer.
+// Reverse-engineered from the UI: upload the image via the shared /upload/images
+// flow, then POST the design page's `updateCustomizeSidebarGroupItemImage` action
+// with id:"headerImage" and the fixed-width image value object. Save is verifiable
+// from the JSON response (code 200, empty data.errors via assertNoAppError).
+async function populateEventBannerViaDesignPage({ eventId, bannerPath, cookie, csrfToken, orgId }) {
+  if (!bannerPath) return null;
+  const currentPath = `/events/${eventId}/publishing/website/design/`;
+  const pageCsrf = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
+  const value = await uploadGlueUpBannerImage({ photoPath: bannerPath, cookie, csrfToken: pageCsrf, orgId, currentPath });
+  await postGlueUpAjax({
+    path: `/events/${eventId}/publishing/website/design/ajax`,
+    currentPath,
+    refererPath: currentPath,
+    action: "updateCustomizeSidebarGroupItemImage",
+    data: { id: "headerImage", value },
+    cookie,
+    csrfToken: pageCsrf,
+    orgId
+  });
+  console.log(`Populated event banner from ${bannerPath}`);
+  return value;
+}
+
+// Uploads a banner image and builds the `headerImage` value object the design
+// customizer expects. Unlike the speaker headshot flow this uses type "fixed-width"
+// (full-bleed header, no square crop); the fixed-width/orig URIs are assembled from
+// the uploaded image id by the same convention the UI uses.
+async function uploadGlueUpBannerImage({ photoPath, cookie, csrfToken, orgId, currentPath }) {
+  const bytes = await readFile(photoPath);
+  const ext = sniffImageExt(bytes);
+  const mime = { jpg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" }[ext] || "image/jpeg";
+
+  const form = new FormData();
+  form.append("files[]", new Blob([bytes], { type: mime }), `banner.${ext}`);
+  form.append("token", csrfToken);
+  form.append("orgID", String(orgId));
+  form.append("currentPath", currentPath);
+  form.append("returnUrl", "");
+  form.append("type", "fixed-width");
+  const uploadJson = await postGlueUpUpload({ path: "/upload/images", body: form, cookie, currentPath });
+  const uploaded = Object.values(uploadJson.data.value)[0] || {};
+  const uuid = uploaded.id;
+  if (!uuid) throw new Error("banner upload returned no image id");
+  const fileExt = uploaded.extension || ext;
+
+  const fixedWidth = (width) => `/resources/public/images/fixed-width/${width}/${uuid}.${fileExt}`;
+  const uri = fixedWidth(1000);
+  const originalUri = `/resources/public/images/orig/${uuid}.${fileExt}`;
+  return {
+    styleString: `background-image: url( ${uri} ) !important;background-position: center center;`,
+    croppedUrl: `/cropped-image/x/alignment/Center?image=${encodeURIComponent(uri)}`,
+    type: "fixed-width",
+    uri,
+    originalUri,
+    html: `<img async src="${uri}" title="" alt="" srcset="${fixedWidth(1920)} 2x"/>`,
+    alignment: "Center",
+    size: 1000,
+    id: uuid,
+    name: `${uuid}.${fileExt}`
+  };
 }
 
 async function postGlueUpUpload({ path, body, cookie, currentPath, urlencoded = false }) {
@@ -1967,6 +2155,7 @@ Usage:
   npm run populate-venue   # populate only the active draft venue
   npm run populate-summary # populate only the active draft description/summary
   npm run populate-speakers # populate only the active draft speakers
+  npm run populate-banner  # populate only the active draft banner (needs banner.jpg in the run)
   npm run finalize         # schedule campaigns after manual review and publish
 
 Support/debug commands:
@@ -1979,6 +2168,7 @@ Support/debug commands:
   npm run populate-venue -- --event 6
   npm run populate-summary -- --event 6
   npm run populate-speakers -- --event 6
+  npm run populate-banner -- --event 6
 
 Options:
   --year YYYY        Defaults to the current year for ensure
