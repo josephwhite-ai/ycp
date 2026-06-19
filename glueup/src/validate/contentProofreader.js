@@ -67,17 +67,32 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
     const payload = await response.json();
     const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
     const parsed = JSON.parse(text || "{}");
-    const issues = Array.isArray(parsed.issues) ? parsed.issues.filter(validIssue) : [];
+    const sourceText = JSON.stringify(reviewInput);
+    const issues = Array.isArray(parsed.issues)
+      ? parsed.issues.filter((issue) => validIssue(issue, sourceText))
+      : [];
     return { status: "completed", reviewedAt: new Date().toISOString(), issues };
   } catch (error) {
     return { status: "skipped", reason: error.message, issues: [] };
   }
 }
 
-function validIssue(issue) {
+function validIssue(issue, sourceText) {
   return (
     issue &&
     ["HIGH", "MEDIUM"].includes(issue.confidence) &&
-    [issue.field, issue.original, issue.suggestion, issue.reason].every((value) => typeof value === "string" && value.trim())
+    [issue.field, issue.original, issue.suggestion, issue.reason].every((value) => typeof value === "string" && value.trim()) &&
+    sourceText.includes(issue.original) &&
+    canonicalCorrection(issue.original) !== canonicalCorrection(issue.suggestion)
   );
+}
+
+// Spacing, punctuation, and capitalization-only changes are style edits rather
+// than typo corrections and must never block publication.
+function canonicalCorrection(value) {
+  return String(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
 }
