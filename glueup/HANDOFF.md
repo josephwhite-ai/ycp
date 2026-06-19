@@ -66,9 +66,14 @@ Current baseline:
 - [x] Speaker details in invitation campaigns
   - `buildDefaultCampaignSetupPayloads` inserts a "Featured Speakers" `html` block (name — position, company, built by `buildCampaignSpeakersHtml`) after the `summary` block in the `ContentFormSubmit` email body. Applied to both the week-before and day-before campaigns.
 
-## Planned: Google Custom Search headshot fallback for speakers without a Drive photo
+## Implemented: Google Custom Search headshot fallback for speakers without a Drive photo
 
 Goal: when a speaker has no photo in the Google Drive bio folder (e.g. Joseph Frissora III for event 7), fetch a headshot via the **Google Custom Search JSON API** (image search) instead of leaving the default avatar. Do NOT scrape Google Images or LinkedIn HTML directly — the results page is JS-rendered/obfuscated and scraping violates ToS. The JSON API is the supported path.
+
+Implementation note: the fallback runs automatically when CSE credentials are
+configured and Drive has no usable photo. Results must pass name/company metadata
+confidence plus size/type/aspect checks; source URLs and confidence reasons appear
+in the validation report. Drive photos always take precedence.
 
 Context already in place (reuse, don't rebuild):
 - `gatherSpeakerPhotos` (in `prepare`, `src/cli.js`) pulls Drive headshots into `runs/<run>/speaker-photos/` + writes `speaker-photos.json` (entries: `fullName`, `firstName`, `lastName`, `position`, `company`, `photoFile`, `source`). Speakers missing here are the fallback candidates.
@@ -88,7 +93,7 @@ API call:
 Implementation steps:
 1. New module `src/generate/speakerImageSearch.js` exporting `findSpeakerHeadshot({ speaker })` that runs the query, picks the best `items[]` candidate, downloads the bytes, and returns `{ bytes, ext, sourceUrl }` (null if no creds or no good candidate). Keep it best-effort/non-fatal like `bannerSelector.js`.
 2. Call it from `gatherSpeakerPhotos` (preferred — runs in CI where this can live alongside Drive logic) for each speaker with no Drive match: write the bytes to `speaker-photos/<slug>.<ext>`, push a `speaker-photos.json` entry with `source: "google-image-search:<sourceUrl>"`. Then the existing upload/update path handles Glue Up.
-3. **Correctness guard (important):** auto-taking result #1 can attach the wrong person's face to a public page. Add at least one of: (a) record `source`/`sourceUrl` in `speaker-photos.json` and surface it in the validation report so a human can eyeball it before publish; (b) optional Gemini sanity check reusing `GEMINI_API_KEY`/`googleAccessToken` (from `bannerSelector.js`) — prompt it to confirm a single-person professional headshot and reject group shots/logos. Gemini cannot verify identity, only plausibility. Consider gating behind a `--allow-image-search` flag or a per-speaker confirm so it never silently publishes an unverified face.
+3. **Correctness guard (implemented):** never take result #1 on rank alone. Require corroborating result metadata: exact/all-token name plus company evidence, or an exact distinctive name on a recognized professional-profile source. Preserve the image URL, context page, score, and reasons in `speaker-photos.json` and surface them in the validation report. Gemini is not used because it cannot verify identity.
 4. Edge cases: no creds → skip silently (default avatar). Quota/429 → log and skip. Non-image/oversized → skip. Names with no company → still query name + position.
 
 For event 7 specifically: only Joseph Frissora III lacks a Drive photo (Justin Murphy has one and is now populated). The quickest unblock without the API is to drop a verified image into `runs/evt-2026-007/speaker-photos/joseph-frissora-iii.jpg` + add a `speaker-photos.json` entry, then `npm run populate-speakers -- --run runs/evt-2026-007` (the upsert path attaches it to the existing speaker).

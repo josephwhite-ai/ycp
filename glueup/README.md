@@ -192,7 +192,15 @@ Add these repository secrets/variables:
 
 - Secret `GOOGLE_SERVICE_ACCOUNT_JSON`: full service account JSON.
 - Secret `OPENAI_API_KEY`: optional; deterministic template fill briefs work without it.
+- Secrets `GOOGLE_CSE_API_KEY` and `GOOGLE_CSE_CX`: optional; enable automatic speaker image search when Drive has no photo.
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
+
+When those credentials are configured, missing Drive speaker photos automatically
+fall back to Google Custom Search. Drive photos always take precedence. Search
+results are used only when their metadata strongly corroborates the speaker name
+and company, or an exact distinctive name appears on a professional profile.
+The confidence reasons and source URLs are recorded in `speaker-photos.json` and
+listed under **Speaker Image Review** in `validation-report.md`.
 
 The workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact named `glueup-run-evt-<year>-<index>`. Creating, publishing, or scheduling Glue Up objects does not happen in GitHub Actions.
 

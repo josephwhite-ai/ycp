@@ -71,6 +71,8 @@ jobs:
           TIMEZONE: America/New_York
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CSE_API_KEY: ${{ secrets.GOOGLE_CSE_API_KEY }}
+          GOOGLE_CSE_CX: ${{ secrets.GOOGLE_CSE_CX }}
           EVENT: ${{ steps.event.outputs.event }}
           YEAR: ${{ steps.event.outputs.year }}
         run: npm run monthly-prepare -- --event "$EVENT" --year "$YEAR"
