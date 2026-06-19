@@ -29,6 +29,7 @@ export function getConfig(overrides = {}) {
     timezone: overrides.timezone || process.env.TIMEZONE || DEFAULT_TIMEZONE,
     openaiApiKey: process.env.OPENAI_API_KEY || "",
     openaiModel: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    geminiApiKey: process.env.GEMINI_API_KEY || "",
     geminiModel: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite"
   };
 }
