@@ -13,6 +13,7 @@ import {
 } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
+import { selectPublicAgenda, formatAgendaRange } from "./extract/agenda.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
@@ -49,6 +50,25 @@ const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
 const PHOTO_LIBRARY_FOLDER_ID = process.env.GLUEUP_PHOTO_LIBRARY_FOLDER_ID || "0APt58RkpagPZUk9PVA";
 const BANNER_SKIP_FOLDER_RE = /pdf split|organizer|eventdata|receipt|^ads$/i;
 const BANNER_CANDIDATE_LIMIT = 8;
+// Public event-page block layout (Website > Design "home" page). The summary and
+// schedule (html) blocks are written by populate; these widgets follow them.
+const PUBLIC_PAGE_WIDGETS = [
+  "speakersWidget",
+  "agendaWidget",
+  "venueWidget",
+  "sponsorsWidget",
+  "exhibitorsWidget",
+  "ticketsWidget",
+  "directoryWidget"
+];
+// Standard YCP "Join us" call-to-action appended under the schedule. Optional.
+const YCP_JOIN_BLURB =
+  '<p>&nbsp;</p><p><strong>Join us!</strong></p>' +
+  "<p>Come belong to the nation’s largest young professional Catholic network. " +
+  "Together we’ll learn to live and share our Catholic faith through our daily work. " +
+  "Access member-exclusive events and more!</p><p>&nbsp;</p>" +
+  '<p><a href="http://www.youngcatholicprofessionals.org/why-belong#Join-Now" ' +
+  'rel="noopener noreferrer" target="_blank" class="text-color-blue"><strong>Learn more</strong></a></p>';
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -68,6 +88,8 @@ try {
     await populateSummaryWorkflow(args);
   } else if (command === "populate-speakers") {
     await populateSpeakersWorkflow(args);
+  } else if (command === "populate-page") {
+    await populatePageWorkflow(args);
   } else if (command === "populate-banner") {
     await populateBannerWorkflow(args);
   } else if (command === "finalize") {
@@ -464,6 +486,13 @@ async function populateSpeakersWorkflow(args) {
   await populateSpeakers({ ...args, run: runDir });
 }
 
+async function populatePageWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populatePage({ ...args, run: runDir });
+}
+
 async function populateBannerWorkflow(args) {
   const runDir = resolveRunDir(args);
   await writeCurrentRun(runDir);
@@ -705,6 +734,7 @@ async function populateDraft(args) {
   const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId });
   const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
   const speakersResult = await populateSpeakers({ ...args, run: runDir }, { manifest, event, eventId });
+  const pageResult = await populatePage({ ...args, run: runDir }, { manifest, event, eventId });
   const bannerResult = await populateBanner({ ...args, run: runDir }, { manifest, eventId });
   manifest.status = "draft_populated";
   manifest.glueUp = {
@@ -713,6 +743,7 @@ async function populateDraft(args) {
     ...(summaryResult ? { summaryPopulatedAt: summaryResult.populatedAt } : {}),
     ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {}),
     ...(speakersResult ? { speakersPopulatedAt: speakersResult.populatedAt, speakers: speakersResult.speakers } : {}),
+    ...(pageResult ? { pagePopulatedAt: pageResult.populatedAt } : {}),
     ...(bannerResult ? { bannerPopulatedAt: bannerResult.populatedAt, banner: bannerResult.banner } : {})
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
@@ -823,6 +854,32 @@ async function populateSpeakers(args, options = {}) {
   return { populatedAt, speakers: populated };
 }
 
+async function populatePage(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const value = await populateEventPageContentViaDesignPage({
+    eventId,
+    event,
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    orgId: auth.orgId
+  });
+  if (!value) return null;
+
+  const populatedAt = new Date().toISOString();
+  if (!options.manifest) {
+    manifest.status = "page_populated";
+    manifest.glueUp = { ...(manifest.glueUp || {}), pagePopulatedAt: populatedAt };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt };
+}
+
 async function populateBanner(args, options = {}) {
   const runDir = resolveRunDir(args);
   const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
@@ -881,6 +938,7 @@ async function populateCampaigns(args) {
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   printAuthNote(auth);
   const normalizedEvent = normalizeEventFields(event);
+  const speakersHtml = buildCampaignSpeakersHtml(normalizedEvent);
   for (const campaign of targetCampaigns) {
     const planned = CAMPAIGN_PLAN.find((item) => item.key === campaign.key);
     if (planned) {
@@ -890,7 +948,7 @@ async function populateCampaigns(args) {
     await applyCampaignSetup({
       eventId,
       campaignId: campaign.campaignId,
-      payloads: buildDefaultCampaignSetupPayloads({ eventId, event: normalizedEvent, campaign }),
+      payloads: buildDefaultCampaignSetupPayloads({ eventId, event: normalizedEvent, campaign, speakersHtml }),
       cookie: auth.cookie,
       orgId: auth.orgId
     });
@@ -1374,6 +1432,59 @@ async function populateEventBannerViaDesignPage({ eventId, bannerPath, cookie, c
   return value;
 }
 
+// The public event page (Website > Design "home" page) is an ordered array of
+// content blocks saved via `publicPageSubmit`. We own the first two blocks:
+//   block 0 = `summary`  -> renders the event description / "event details"
+//   block 1 = `html`     -> the schedule (built from the event's public agenda)
+// followed by the blueprint's standard widgets. Posting blocks with empty ids
+// makes Glue Up mint fresh ids and replace the page content, so this is safe to
+// re-run and does not require reading the per-event block ids first.
+// Builds the schedule HTML for block 1 from the event's public agenda rows.
+// Each row renders as its time range plus any label; internal setup/cleanup rows
+// are already excluded by selectPublicAgenda.
+function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
+  const rows = selectPublicAgenda(event?.agenda || []);
+  const parts = [];
+  if (rows.length) {
+    parts.push("<p><strong>Schedule</strong></p>");
+    for (const row of rows) {
+      const range = formatAgendaRange(row);
+      if (!range) continue;
+      const label = row.label ? `&nbsp;&ndash;&nbsp;${escapeHtml(row.label)}` : "";
+      parts.push(`<p><strong>${range}</strong>${label}</p>`);
+    }
+  }
+  if (includeJoinBlurb) parts.push(YCP_JOIN_BLURB);
+  return parts.join("");
+}
+
+// Writes the public event page content blocks via `publicPageSubmit`. Requires
+// the page-embedded CSRF token (the same one the banner step uses); the cookie
+// token alone is rejected by the publishing endpoints.
+async function populateEventPageContentViaDesignPage({ eventId, event, cookie, csrfToken, orgId }) {
+  const currentPath = `/events/${eventId}/publishing/website/design/`;
+  const pageCsrf = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
+  const scheduleHtml = buildEventScheduleHtml(event);
+  const content = [
+    { type: "summary", id: "" },
+    ...(scheduleHtml ? [{ type: "html", id: "", value: scheduleHtml }] : []),
+    ...PUBLIC_PAGE_WIDGETS.map((type) => ({ type, id: "" }))
+  ];
+  const payload = await postGlueUpAjax({
+    path: `/events/${eventId}/publishing/website/pages/ajax`,
+    currentPath,
+    refererPath: currentPath,
+    action: "publicPageSubmit",
+    data: { language: "en", pageID: "home", content, submit: "save", title: "Event Details" },
+    cookie,
+    csrfToken: pageCsrf,
+    orgId
+  });
+  const blocks = payload?.data?.value?.content?.length || 0;
+  console.log(`Populated event page content (${blocks} blocks; schedule ${scheduleHtml ? "set" : "skipped"})`);
+  return payload?.data?.value || null;
+}
+
 // Uploads a banner image and builds the `headerImage` value object the design
 // customizer expects. Unlike the speaker headshot flow this uses type "fixed-width"
 // (full-bleed header, no square crop); the fixed-width/orig URIs are assembled from
@@ -1455,6 +1566,21 @@ function imageDimensions(bytes) {
 }
 
 // Parses the raw speaker field into structured entries, dropping TBD placeholders.
+// Renders the event's parsed speakers as an HTML list for the invitation
+// campaign email body. Returns null when there are no non-TBD speakers.
+function buildCampaignSpeakersHtml(event) {
+  const speakers = normalizeEventSpeakers(event);
+  if (!speakers.length) return null;
+  const items = speakers
+    .map((speaker) => {
+      const name = escapeHtml(speaker.fullName);
+      const detail = [speaker.position, speaker.company].filter(Boolean).join(", ");
+      return `<li><strong>${name}</strong>${detail ? `&nbsp;&ndash;&nbsp;${escapeHtml(detail)}` : ""}</li>`;
+    })
+    .join("");
+  return `<p><strong>Featured Speakers</strong></p><ul>${items}</ul>`;
+}
+
 function normalizeEventSpeakers(event) {
   const rawSpeakers = Array.isArray(event?.speakers) && event.speakers.length
     ? event.speakers
@@ -1611,10 +1737,29 @@ async function postGlueUpAjax({ path, currentPath, refererPath, action, data, co
 
 async function fillFirstVisible(page, selectors, value) {
   if (!value) return false;
+  const target = String(value);
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
     if ((await locator.count()) > 0 && (await locator.isVisible().catch(() => false))) {
-      await locator.fill(String(value));
+      // Already correct (e.g. a readonly time-picker pre-filled from the draft):
+      // nothing to do, and .fill() would throw on a readonly input.
+      const current = await locator.inputValue().catch(() => null);
+      if (current === target) return true;
+      const readOnly = await locator
+        .evaluate((el) => el.hasAttribute("readonly") || el.readOnly)
+        .catch(() => false);
+      if (readOnly) {
+        // Glue Up renders some fields (time pickers) as readonly widgets that
+        // reject .fill(). Set the value directly and fire input/change so the
+        // surrounding component picks it up.
+        await locator.evaluate((el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }, target);
+      } else {
+        await locator.fill(target);
+      }
       return true;
     }
   }
