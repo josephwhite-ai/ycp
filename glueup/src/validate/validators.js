@@ -9,7 +9,7 @@ export function validateEventRun({ event, artifacts, config, speakerPhotos = [] 
   const speakerImagesForReview = speakerPhotos.filter(
     (photo) =>
       photo.sourceUrl ||
-      String(photo.source || "").startsWith("google-image-search:")
+      /^(?:google|tavily)-image-search:/.test(String(photo.source || ""))
   );
 
   for (const field of REQUIRED_EVENT_FIELDS) {
@@ -154,7 +154,7 @@ export function validationReport(validation) {
     lines.push("## Speaker Image Review", "");
     lines.push("These image-search fallbacks passed the metadata confidence threshold. Source details are retained for review.", "");
     for (const photo of validation.speakerImagesForReview) {
-      const sourceUrl = photo.sourceUrl || String(photo.source || "").replace(/^google-image-search:/, "");
+      const sourceUrl = photo.sourceUrl || String(photo.source || "").replace(/^(?:google|tavily)-image-search:/, "");
       const reasons = photo.confidence?.reasons?.length
         ? `; confidence: ${photo.confidence.reasons.join(", ")}`
         : "";

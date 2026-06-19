@@ -162,6 +162,7 @@ npm run validate -- --run runs/evt-2026-006
 npm run monthly-prepare -- --event 6 --dry-run
 npm run monthly-prepare -- --event 6 --year 2025
 npm run monthly-prepare -- --event 6 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
+npm run monthly-prepare -- --event 7 --additional-speaker "Rich Lamore, Senior Partner and Investments Executive - Boundless Financial Solutions"
 ```
 
 Per-field repair commands (re-run a single populate step against the active draft):
@@ -192,15 +193,16 @@ Add these repository secrets/variables:
 
 - Secret `GOOGLE_SERVICE_ACCOUNT_JSON`: full service account JSON.
 - Secret `OPENAI_API_KEY`: optional; deterministic template fill briefs work without it.
-- Secrets `GOOGLE_CSE_API_KEY` and `GOOGLE_CSE_CX`: optional; enable automatic speaker image search when Drive has no photo.
+- Secret `TAVILY_API_KEY`: optional; enables automatic source-linked speaker image search when Drive has no photo.
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
 
-When those credentials are configured, missing Drive speaker photos automatically
-fall back to Google Custom Search. Drive photos always take precedence. Search
-results are used only when their metadata strongly corroborates the speaker name
-and company, or an exact distinctive name appears on a professional profile.
-The confidence reasons and source URLs are recorded in `speaker-photos.json` and
-listed under **Speaker Image Review** in `validation-report.md`.
+When Tavily and Gemini credentials are configured, missing Drive speaker photos
+automatically fall back to Tavily source-linked images. Drive photos always take
+precedence. Results are used only when source-page metadata strongly corroborates
+the speaker name and company, or an exact distinctive name appears on a professional
+profile; Gemini then rejects logos, groups, graphics, and non-headshots. Confidence
+reasons and source URLs are recorded in `speaker-photos.json` and listed under
+**Speaker Image Review** in `validation-report.md`.
 
 The workflow prepares event-template field briefs, campaign-template fill briefs, validation output, and uploads `glueup/runs/` as an artifact named `glueup-run-evt-<year>-<index>`. Creating, publishing, or scheduling Glue Up objects does not happen in GitHub Actions.
 

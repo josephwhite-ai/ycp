@@ -150,7 +150,7 @@ async function prepare(args) {
     drive.getGoogleDoc(docFile.id),
     drive.listImagesRecursive(eventFolder.id)
   ]);
-  const event = extractEventFromGoogleDoc(doc);
+  const event = addPreparedSpeakerOverride(extractEventFromGoogleDoc(doc), args.additionalSpeaker);
   const speakerPhotos = await gatherSpeakerPhotos({ drive, eventFolder, event, runDir }).catch((error) => {
     console.log(`Speaker photo gathering failed (non-fatal): ${error.message}`);
     return [];
@@ -200,14 +200,28 @@ async function prepare(args) {
   console.log(`Validation: ${validation.ok ? "OK" : "needs attention"}`);
 }
 
+function addPreparedSpeakerOverride(event, additionalSpeaker) {
+  const speaker = String(additionalSpeaker || "").trim();
+  if (!speaker) return event;
+  const key = "speaker (if applicable)";
+  const current = String(event.rawFields?.[key] || "").trim();
+  const withoutTrailingTbd = current.replace(/\n?TBD\s*$/i, "").trim();
+  event.rawFields = {
+    ...(event.rawFields || {}),
+    [key]: [withoutTrailingTbd, speaker, "TBD"].filter(Boolean).join("\n")
+  };
+  console.log(`Added prepare-only speaker override: ${speaker}`);
+  return event;
+}
+
 // Downloads a headshot for each parsed speaker from the event's speaker/bio
 // subfolder and writes it into the run's speaker-photos/ directory. Headshots are
 // usually embedded in a per-speaker Google Doc ("… Photo and Bio"); plain image
 // files are also supported. Speakers with no matching photo are skipped (partial
 // coverage is expected). Returns [{ fullName, firstName, lastName, position,
 // company, photoFile }] for matched speakers; photoFile is relative to runDir.
-// Missing or unusable Drive photos fall back to Google Custom Search. Only
-// high-confidence metadata matches are accepted and surfaced in validation.
+// Missing or unusable Drive photos fall back to Tavily source-linked images.
+// Only high-confidence metadata matches are accepted and surfaced in validation.
 // Collects recent banner candidate images from the shared photo-library drive,
 // walking most-recent year -> most-recent event subfolders (skipping utility
 // folders) and taking the newest images first, up to a small candidate cap.
@@ -356,7 +370,7 @@ async function saveSpeakerImageSearchFallback({ speaker, runDir }) {
   const photoFile = join("speaker-photos", `${slugify(speaker.fullName)}.${image.ext}`);
   await writeFile(join(runDir, photoFile), image.bytes);
   console.log(
-    `Saved high-confidence Google image result: ${speaker.fullName} -> ${photoFile} (${image.confidence.reasons.join("; ")})`
+    `Saved high-confidence Tavily image result: ${speaker.fullName} -> ${photoFile} (${image.confidence.reasons.join("; ")})`
   );
   return {
     fullName: speaker.fullName,
@@ -365,7 +379,7 @@ async function saveSpeakerImageSearchFallback({ speaker, runDir }) {
     position: speaker.position,
     company: speaker.company,
     photoFile,
-    source: `google-image-search:${image.sourceUrl}`,
+    source: `tavily-image-search:${image.sourceUrl}`,
     sourceUrl: image.sourceUrl,
     contextUrl: image.contextUrl,
     confidence: image.confidence
@@ -2464,5 +2478,6 @@ Options:
   --year YYYY        Defaults to the current year for ensure
   --dry-run          Write a plan without mutating Glue Up
   --headed           Open a visible browser for Glue Up page mutations
+  --additional-speaker "Name, Position - Company"  Add a prepare-only speaker override
 `);
 }

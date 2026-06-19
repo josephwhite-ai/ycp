@@ -1,67 +1,77 @@
-const SEARCH_URL = "https://www.googleapis.com/customsearch/v1";
+const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 const GENERIC_COMPANY_WORDS = new Set([
-  "and", "company", "corporation", "financial", "group", "inc", "llc", "partners", "services", "the"
+  "and", "company", "corporation", "financial", "group", "inc", "llc", "partners", "services", "solutions", "the"
 ]);
 const PROFESSIONAL_PROFILE_RE = /(^|\.)(linkedin\.com|crunchbase\.com|bloomberg\.com)$/i;
 
-// Best-effort Google Custom Search image fallback. Search failures, quota limits,
-// unsuitable results, and download failures all return null so prepare can keep
-// the default Glue Up avatar.
+// Best-effort speaker-photo fallback. Tavily ties images to corroborating source
+// pages; metadata establishes identity, then Gemini checks only whether the image
+// is plausibly a single-person professional headshot.
 export async function findSpeakerHeadshot({ speaker }) {
-  const apiKey = process.env.GOOGLE_CSE_API_KEY || "";
-  const cx = process.env.GOOGLE_CSE_CX || "";
-  if (!apiKey || !cx || !speaker?.fullName) return null;
-
-  const query = buildSpeakerImageQuery(speaker);
-  const url = new URL(SEARCH_URL);
-  url.search = new URLSearchParams({
-    key: apiKey,
-    cx,
-    searchType: "image",
-    num: "5",
-    q: query
-  });
+  const tavilyApiKey = process.env.TAVILY_API_KEY || "";
+  const geminiApiKey = process.env.GEMINI_API_KEY || "";
+  if (!tavilyApiKey || !geminiApiKey || !speaker?.fullName) return null;
 
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    const response = await fetch(TAVILY_SEARCH_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tavilyApiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        query: buildSpeakerImageQuery(speaker),
+        search_depth: "basic",
+        max_results: 5,
+        include_images: true,
+        include_image_descriptions: true,
+        exact_match: true
+      }),
+      signal: AbortSignal.timeout(20_000)
+    });
     if (!response.ok) {
-      console.log(`Google image search skipped for "${speaker.fullName}": API returned ${response.status}.`);
+      console.log(`Tavily image search skipped for "${speaker.fullName}": API returned ${response.status}.`);
       return null;
     }
 
     const payload = await response.json();
-    const candidates = (payload.items || [])
-      .filter(isSuitableCandidate)
-      .map((item) => ({ item, confidence: assessCandidateConfidence(item, speaker) }))
-      .filter(({ confidence }) => confidence.high)
-      .sort(
-        (a, b) =>
-          b.confidence.score - a.confidence.score ||
-          candidateVisualScore(b.item) - candidateVisualScore(a.item)
-      );
+    const candidates = buildCandidates(payload.results || [], speaker);
     if (!candidates.length) {
-      console.log(`Google image search found no high-confidence result for "${speaker.fullName}".`);
+      console.log(`Tavily found no high-confidence source page for "${speaker.fullName}".`);
       return null;
     }
 
-    for (const { item, confidence } of candidates) {
-      const image = await downloadCandidate(item).catch((error) => {
+    for (const candidate of candidates) {
+      const image = await downloadCandidate(candidate.url).catch((error) => {
         console.log(`Could not download image candidate for "${speaker.fullName}": ${error.message}`);
         return null;
       });
-      if (image) {
-        return {
-          ...image,
-          sourceUrl: item.link,
-          contextUrl: item.image?.contextLink || "",
-          confidence
-        };
-      }
+      if (!image || !isSuitableDimensions(image.dimensions)) continue;
+
+      const plausibility = await checkHeadshotPlausibility({
+        bytes: image.bytes,
+        mime: image.mime,
+        speaker,
+        candidate,
+        apiKey: geminiApiKey
+      });
+      if (!plausibility.accepted) continue;
+
+      return {
+        bytes: image.bytes,
+        ext: image.ext,
+        sourceUrl: candidate.url,
+        contextUrl: candidate.contextUrl,
+        confidence: {
+          ...candidate.confidence,
+          reasons: [...candidate.confidence.reasons, `Gemini: ${plausibility.reason}`]
+        }
+      };
     }
   } catch (error) {
-    console.log(`Google image search skipped for "${speaker.fullName}": ${error.message}`);
+    console.log(`Tavily image search skipped for "${speaker.fullName}": ${error.message}`);
   }
   return null;
 }
@@ -69,27 +79,18 @@ export async function findSpeakerHeadshot({ speaker }) {
 export function buildSpeakerImageQuery(speaker) {
   const parts = [`"${String(speaker.fullName).trim()}"`];
   if (speaker.position) parts.push(String(speaker.position).trim());
-  if (speaker.company) parts.push("at", String(speaker.company).trim());
+  if (speaker.company) parts.push(String(speaker.company).trim());
   return parts.filter(Boolean).join(" ");
 }
 
-// Identity confidence comes from search-result metadata, not facial recognition.
-// Strong company corroboration is preferred; an exact distinctive name on a
-// professional profile is also accepted when company metadata is unavailable.
-export function assessCandidateConfidence(item, speaker) {
+export function assessCandidateConfidence(result, speaker) {
   const name = normalizeText(speaker.fullName);
   const nameTokens = tokens(speaker.fullName);
   const lastName = normalizeText(speaker.lastName || nameTokens.at(-1));
   const companyTokens = meaningfulCompanyTokens(speaker.company);
   const positionTokens = tokens(speaker.position).filter((token) => token.length >= 4);
-  const evidence = normalizeText([
-    item.title,
-    item.snippet,
-    item.displayLink,
-    item.image?.contextLink,
-    item.link
-  ].filter(Boolean).join(" "));
-  const host = safeHostname(item.image?.contextLink || item.displayLink || item.link);
+  const evidence = normalizeText([result.title, result.content, result.url].filter(Boolean).join(" "));
+  const host = safeHostname(result.url);
 
   const exactName = Boolean(name && evidence.includes(name));
   const allNameTokens = nameTokens.length >= 2 && nameTokens.every((token) => evidence.includes(token));
@@ -119,21 +120,104 @@ export function assessCandidateConfidence(item, speaker) {
   return { level: high ? "high" : "low", high, score, reasons };
 }
 
-function isSuitableCandidate(item) {
-  const mime = String(item?.mime || "").toLowerCase();
-  const width = Number(item?.image?.width || 0);
-  const height = Number(item?.image?.height || 0);
-  const aspect = width / height;
-  return Boolean(item?.link) && ALLOWED_MIME.has(mime) && width >= 200 && height >= 200 && aspect >= 0.55 && aspect <= 1.35;
+function buildCandidates(results, speaker) {
+  const candidates = [];
+  for (const result of results) {
+    const confidence = assessCandidateConfidence(result, speaker);
+    if (!confidence.high) continue;
+    for (const image of result.images || []) {
+      const url = typeof image === "string" ? image : image?.url;
+      if (!/^https?:\/\//i.test(String(url || ""))) continue;
+      const description = typeof image === "string" ? "" : image.description || "";
+      candidates.push({
+        url,
+        description,
+        contextUrl: result.url,
+        sourceTitle: result.title || "",
+        confidence,
+        relevance: imageRelevance({ url, description, sourceTitle: result.title }, speaker)
+      });
+    }
+  }
+  return candidates
+    .sort((a, b) => b.confidence.score - a.confidence.score || b.relevance - a.relevance)
+    .slice(0, 10);
 }
 
-function candidateVisualScore(item) {
-  const width = Number(item.image.width);
-  const height = Number(item.image.height);
-  const aspect = width / height;
-  const portraitBonus = aspect <= 1 ? 300_000 : 0;
-  const jpegBonus = item.mime === "image/jpeg" ? 100_000 : 0;
-  return Math.min(width * height, 4_000_000) + portraitBonus + jpegBonus - Math.abs(aspect - 0.8) * 100_000;
+function imageRelevance(candidate, speaker) {
+  const evidence = normalizeText([candidate.url, candidate.description, candidate.sourceTitle].join(" "));
+  const nameMatches = tokens(speaker.fullName).filter((token) => evidence.includes(token)).length;
+  const portraitHint = /headshot|portrait|profile|team|staff|bio/.test(evidence) ? 2 : 0;
+  const logoPenalty = /logo|icon|banner|favicon/.test(evidence) ? 4 : 0;
+  return nameMatches * 2 + portraitHint - logoPenalty;
+}
+
+async function checkHeadshotPlausibility({ bytes, mime, speaker, candidate, apiKey }) {
+  try {
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+    const response = await fetch(`${GEMINI_BASE}/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        contents: [{
+          role: "user",
+          parts: [
+            {
+              text:
+                `Assess this candidate image for ${speaker.fullName}. ` +
+                `The source page is "${candidate.sourceTitle}" (${candidate.contextUrl}). ` +
+                "Accept only a clear, professional image dominated by one identifiable adult person's face and upper body. " +
+                "Reject groups, logos, graphics, screenshots, full-page images, low-quality images, and photos where the person is too small. " +
+                "Do not claim to verify identity; metadata handles identity."
+            },
+            { inline_data: { mime_type: mime, data: bytes.toString("base64") } }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              accepted: { type: "BOOLEAN" },
+              reason: { type: "STRING" }
+            },
+            required: ["accepted", "reason"]
+          }
+        }
+      }),
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (!response.ok) return { accepted: false, reason: `Gemini returned ${response.status}` };
+    const payload = await response.json();
+    const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const parsed = JSON.parse(text || "{}");
+    return { accepted: parsed.accepted === true, reason: String(parsed.reason || "no reason") };
+  } catch (error) {
+    return { accepted: false, reason: error.message };
+  }
+}
+
+async function downloadCandidate(url) {
+  const response = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; YCPGlueUpPrepare/1.0)" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(20_000)
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  if (declaredLength > MAX_IMAGE_BYTES) throw new Error("image exceeds 8 MB limit");
+  const bytes = await readLimitedBody(response, MAX_IMAGE_BYTES);
+  const ext = sniffDownloadedImage(bytes);
+  if (!ext) throw new Error("downloaded bytes are not a supported image");
+  const mime = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" }[ext];
+  return { bytes, ext, mime, dimensions: imageDimensions(bytes, ext) };
+}
+
+function isSuitableDimensions(dimensions) {
+  if (!dimensions) return false;
+  const aspect = dimensions.width / dimensions.height;
+  return dimensions.width >= 200 && dimensions.height >= 200 && aspect >= 0.55 && aspect <= 1.35;
 }
 
 function meaningfulCompanyTokens(value) {
@@ -157,30 +241,10 @@ function normalizeText(value) {
 
 function safeHostname(value) {
   try {
-    const url = /^https?:\/\//i.test(String(value || "")) ? value : `https://${value}`;
-    return new URL(url).hostname.toLowerCase();
+    return new URL(value).hostname.toLowerCase();
   } catch {
     return "";
   }
-}
-
-async function downloadCandidate(candidate) {
-  const response = await fetch(candidate.link, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; YCPGlueUpPrepare/1.0)" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(20_000)
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-  const contentType = String(response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
-  if (!ALLOWED_MIME.has(contentType)) throw new Error(`unexpected content type ${contentType || "unknown"}`);
-  const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (declaredLength > MAX_IMAGE_BYTES) throw new Error("image exceeds 8 MB limit");
-
-  const bytes = await readLimitedBody(response, MAX_IMAGE_BYTES);
-  const ext = sniffDownloadedImage(bytes);
-  if (!ext) throw new Error("downloaded bytes are not a supported image");
-  return { bytes, ext };
 }
 
 async function readLimitedBody(response, limit) {
@@ -205,5 +269,31 @@ function sniffDownloadedImage(bytes) {
   if (bytes?.[0] === 0xff && bytes?.[1] === 0xd8 && bytes?.[2] === 0xff) return "jpg";
   if (bytes?.[0] === 0x89 && bytes?.[1] === 0x50 && bytes?.[2] === 0x4e && bytes?.[3] === 0x47) return "png";
   if (bytes?.toString("ascii", 0, 4) === "RIFF" && bytes?.toString("ascii", 8, 12) === "WEBP") return "webp";
+  return null;
+}
+
+function imageDimensions(bytes, ext) {
+  if (ext === "png" && bytes.length >= 24) {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+  if (ext === "jpg") {
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      const marker = bytes[offset + 1];
+      if (marker >= 0xc0 && marker <= 0xc3) {
+        return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
+      }
+      const length = bytes.readUInt16BE(offset + 2);
+      if (length < 2) break;
+      offset += 2 + length;
+    }
+  }
+  if (ext === "webp" && bytes.toString("ascii", 12, 16) === "VP8X" && bytes.length >= 30) {
+    return {
+      width: 1 + bytes.readUIntLE(24, 3),
+      height: 1 + bytes.readUIntLE(27, 3)
+    };
+  }
   return null;
 }
