@@ -173,6 +173,7 @@ npm run populate-summary -- --event 6
 npm run populate-speakers -- --event 6
 npm run populate-page -- --event 6     # public event page content blocks (summary + schedule)
 npm run populate-banner -- --event 6   # needs banner.jpg in the run dir
+npm run populate-campaigns -- --event 6 # invitation campaign content only
 ```
 
 ## Event folder naming
