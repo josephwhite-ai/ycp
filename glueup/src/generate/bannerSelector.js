@@ -59,11 +59,18 @@ export async function selectBannerCandidate({ drive, candidates, event, config }
     return { chosen: null, reason: "no banner candidates", ranking: [], skipped: [] };
   }
 
-  let token;
-  try {
-    token = await googleAccessToken(GENAI_SCOPES);
-  } catch (error) {
-    return { chosen: null, reason: `no Google credentials for Gemini ranking: ${error.message}`, ranking: [], skipped: candidates };
+  // Two auth modes: an AI Studio API key (GEMINI_API_KEY) if provided — the
+  // simplest path for generateContent — otherwise a service-account OAuth token
+  // (reuses the Drive credential). API key wins when both are available.
+  let authHeaders;
+  if (config?.geminiApiKey) {
+    authHeaders = { "x-goog-api-key": config.geminiApiKey };
+  } else {
+    try {
+      authHeaders = { Authorization: `Bearer ${await googleAccessToken(GENAI_SCOPES)}` };
+    } catch (error) {
+      return { chosen: null, reason: `no Google credentials for Gemini ranking: ${error.message}`, ranking: [], skipped: candidates };
+    }
   }
 
   const { withThumb, skipped } = await loadThumbnails(drive, candidates);
@@ -96,7 +103,7 @@ export async function selectBannerCandidate({ drive, candidates, event, config }
   const response = await fetch(`${GENAI_BASE}/models/${model}:generateContent`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({

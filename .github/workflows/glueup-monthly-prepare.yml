@@ -70,6 +70,7 @@ jobs:
           GLUEUP_EVENTS_FOLDER_ID: ${{ vars.GLUEUP_EVENTS_FOLDER_ID || '1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE' }}
           TIMEZONE: America/New_York
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EVENT: ${{ steps.event.outputs.event }}
           YEAR: ${{ steps.event.outputs.year }}
         run: npm run monthly-prepare -- --event "$EVENT" --year "$YEAR"
