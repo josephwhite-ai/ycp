@@ -210,6 +210,10 @@ function addPreparedSpeakerOverride(event, additionalSpeaker) {
     ...(event.rawFields || {}),
     [key]: [withoutTrailingTbd, speaker, "TBD"].filter(Boolean).join("\n")
   };
+  const parsedSpeakers = Array.isArray(event.speakers)
+    ? event.speakers.filter((entry) => !/^TBD\s*$/i.test(String(entry).trim()))
+    : [];
+  event.speakers = [...parsedSpeakers, speaker, "TBD"];
   console.log(`Added prepare-only speaker override: ${speaker}`);
   return event;
 }
