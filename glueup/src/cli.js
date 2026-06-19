@@ -14,6 +14,13 @@ import {
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
 import { parseEventAgenda, selectPublicAgenda, formatAgendaRange } from "./extract/agenda.js";
+import {
+  PUBLIC_PAGE_WIDGETS,
+  buildEventScheduleHtml,
+  descriptionToHtml,
+  buildCampaignSpeakersHtml,
+  renderPublishedContent
+} from "./generate/eventContent.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
@@ -2194,12 +2201,29 @@ async function assertGlueUpEventIsDraft({ eventId, cookie, source }) {
 // pops "Please publish your event" and blocks the send. Fail fast with a clear
 // message rather than letting each schedule-campaign call error mid-loop.
 async function assertGlueUpEventIsPublished({ eventId, cookie, source }) {
+  const upcoming = await glueUpConfirmsUpcoming(eventId, { cookie });
+  if (upcoming) {
+    const stillDraft = await glueUpConfirmsDraft(eventId, { cookie });
+    if (stillDraft) {
+      console.log(`Warning: event ${eventId} appears in both upcoming and draft list HTML; treating upcoming as published.`);
+    }
+    return;
+  }
   const stillDraft = await glueUpConfirmsDraft(eventId, { cookie });
   if (stillDraft) {
     throw new Error(
       `${source} points at Glue Up event ${eventId}, which is still a draft. Publish the event in Glue Up after reviewing it, then re-run finalize. Scheduling is blocked until the event is published.`
     );
   }
+  throw new Error(
+    `${source} points at Glue Up event ${eventId}, but it was not found in Glue Up's upcoming/published event list. Refusing to schedule campaigns.`
+  );
+}
+
+async function glueUpConfirmsUpcoming(eventId, auth) {
+  if (!eventId || !auth?.cookie) return false;
+  const html = await fetchGlueUpEventListHtml({ path: "/events/upcoming/", cookie: auth.cookie, label: "upcoming event" });
+  return eventListContainsEventId(html, eventId);
 }
 
 async function glueUpConfirmsDraft(eventId, auth) {
@@ -2218,7 +2242,11 @@ async function safeGlueUpConfirmsDraft(eventId, auth) {
 }
 
 async function fetchGlueUpDraftListHtml({ cookie }) {
-  const response = await fetch(`${GLUEUP_BASE_URL}/events/draft/`, {
+  return fetchGlueUpEventListHtml({ path: "/events/draft/", cookie, label: "draft" });
+}
+
+async function fetchGlueUpEventListHtml({ path, cookie, label }) {
+  const response = await fetch(`${GLUEUP_BASE_URL}${path}`, {
     headers: {
       cookie,
       accept: "text/html,application/xhtml+xml",
@@ -2227,12 +2255,16 @@ async function fetchGlueUpDraftListHtml({ cookie }) {
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`Failed to load Glue Up draft list for draft verification (${response.status}).`);
+    throw new Error(`Failed to load Glue Up ${label} list for status verification (${response.status}).`);
   }
   return text;
 }
 
 function draftListContainsEventId(html, eventId) {
+  return eventListContainsEventId(html, eventId);
+}
+
+function eventListContainsEventId(html, eventId) {
   const id = String(eventId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return [
     new RegExp(`/events/${id}(?:/|\\b)`),
