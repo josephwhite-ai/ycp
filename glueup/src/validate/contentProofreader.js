@@ -83,8 +83,21 @@ function validIssue(issue, sourceText) {
     ["HIGH", "MEDIUM"].includes(issue.confidence) &&
     [issue.field, issue.original, issue.suggestion, issue.reason].every((value) => typeof value === "string" && value.trim()) &&
     sourceText.includes(issue.original) &&
-    canonicalCorrection(issue.original) !== canonicalCorrection(issue.suggestion)
+    canonicalCorrection(issue.original) !== canonicalCorrection(issue.suggestion) &&
+    meaningfulWords(issue.original) !== meaningfulWords(issue.suggestion)
   );
+}
+
+function meaningfulWords(value) {
+  const connectors = new Set(["a", "an", "and", "or", "the", "to"]);
+  return String(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word && !connectors.has(word))
+    .sort()
+    .join("|");
 }
 
 // Spacing, punctuation, and capitalization-only changes are style edits rather
