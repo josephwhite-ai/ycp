@@ -71,6 +71,34 @@ Current baseline:
 - [x] Speaker details in invitation campaigns
   - `buildDefaultCampaignSetupPayloads` inserts a "Featured Speakers" `html` block (name — position, company, built by `buildCampaignSpeakersHtml`) after the `summary` block in the `ContentFormSubmit` email body. Applied to both the week-before and day-before campaigns.
 
+## Architecture: prepare renders the final content, populate transfers it
+
+To make the content-review pass cover exactly what gets published, all final
+public-facing strings are rendered in `prepare` and carried in the artifact;
+`populate` is a dumb transfer agent that pushes them verbatim.
+
+- `src/generate/eventContent.js` is the single source of truth for rendered
+  content (pure functions, no Glue Up/network): `renderPublishedContent({ event, speakers })`
+  returns `{ summaryHtml, pageScheduleHtml, enableSpeakers, campaignSpeakersHtml, widgets }`.
+  It owns the schedule/where-when/venue-line/date builders, the YCP "Join us"
+  CTA, `descriptionToHtml`, and `buildCampaignSpeakersHtml`.
+- `prepare` renders from the **normalized** event (`normalizeEventFields` — the
+  same normalization `populate` applies), writes `content-render.json` into the
+  run, then passes the bundle to `proofreadEventContent` (which strips tags via
+  `htmlToText` and reviews `publishedSummary`/`publishedSchedule`/`publishedCampaignSpeakers`).
+- `populate` loads the bundle via `loadRenderedContent(runDir, event)` and pushes
+  it: `populateEventSummaryViaSummaryPage({ summaryHtml })`,
+  `populateEventPageContentViaDesignPage({ scheduleHtml, enableSpeakers, widgets })`,
+  and `buildDefaultCampaignSetupPayloads({ speakersHtml })`. These no longer
+  author content — they only transfer it.
+- **Fallback:** if `content-render.json` is absent (older artifacts / local
+  debugging), `loadRenderedContent` renders once via the same module and logs it.
+  Same code, not a second author, so there is no drift.
+- **Parity requirement:** `prepare` and the fallback both render from
+  `normalizeEventFields(event)`, so proofread strings match what is pushed.
+  Anything inherently populate-time (venue geo from `/map/ajax`, speaker upsert
+  ids, image uploads) is non-text and out of the proofreader's scope.
+
 ## Implemented: Tavily headshot fallback for speakers without a Drive photo
 
 Goal: when a speaker has no photo in the Google Drive bio folder, find a source-linked image via the **Tavily Search API** instead of leaving the default avatar. Google Custom Search JSON API was removed because Google closed it to new customers in 2026 and returned 403 for this project.

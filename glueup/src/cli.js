@@ -13,14 +13,7 @@ import {
 } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
-import { parseEventAgenda, selectPublicAgenda, formatAgendaRange } from "./extract/agenda.js";
-import {
-  PUBLIC_PAGE_WIDGETS,
-  buildEventScheduleHtml,
-  descriptionToHtml,
-  buildCampaignSpeakersHtml,
-  renderPublishedContent
-} from "./generate/eventContent.js";
+import { PUBLIC_PAGE_WIDGETS, renderPublishedContent } from "./generate/eventContent.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
@@ -61,23 +54,6 @@ const BANNER_SKIP_FOLDER_RE = /pdf split|organizer|eventdata|receipt|^ads$/i;
 const BANNER_CANDIDATE_LIMIT = 8;
 // Public event-page block layout (Website > Design "home" page). The summary and
 // schedule (html) blocks are written by populate; these widgets follow them.
-const PUBLIC_PAGE_WIDGETS = [
-  "speakersWidget",
-  "agendaWidget",
-  "venueWidget",
-  "sponsorsWidget",
-  "exhibitorsWidget",
-  "ticketsWidget",
-  "directoryWidget"
-];
-// Standard YCP "Join us" call-to-action appended under the schedule. Optional.
-const YCP_JOIN_BLURB =
-  '<p>&nbsp;</p><p><strong>Join us!</strong></p>' +
-  "<p>Come belong to the nation’s largest young professional Catholic network. " +
-  "Together we’ll learn to live and share our Catholic faith through our daily work. " +
-  "Access member-exclusive events and more!</p><p>&nbsp;</p>" +
-  '<p><a href="http://www.youngcatholicprofessionals.org/why-belong#Join-Now" ' +
-  'rel="noopener noreferrer" target="_blank" class="text-color-blue"><strong>Learn more</strong></a></p>';
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -176,10 +152,19 @@ async function prepare(args) {
     return null;
   });
   const artifacts = await generateArtifacts({ event, photos, config });
+  // Render the final published strings here so the artifact carries exactly what
+  // populate will transfer, and the proofreading pass reviews the real output.
+  // Render from the normalized event so it matches what populate pushes.
+  const normalizedEvent = normalizeEventFields(event);
+  const renderedContent = renderPublishedContent({
+    event: normalizedEvent,
+    speakers: normalizeEventSpeakers(normalizedEvent)
+  });
   const contentReview = await proofreadEventContent({
     event,
     speakers: normalizeEventSpeakers(event),
     artifacts,
+    rendered: renderedContent,
     config
   });
   const validation = validateEventRun({ event, artifacts, config, speakerPhotos, contentReview });
@@ -202,6 +187,7 @@ async function prepare(args) {
   await writeJson(join(runDir, "photos.json"), photos);
   await writeJson(join(runDir, "speaker-photos.json"), speakerPhotos);
   await writeJson(join(runDir, "content-review.json"), contentReview);
+  await writeJson(join(runDir, "content-render.json"), renderedContent);
   await writeJson(join(runDir, "template-selection.json"), selectEventTemplate(event));
   await writeJson(join(runDir, "photo-recommendations.json"), artifacts.photoRecommendations || []);
   await writeFile(join(runDir, "webpage.md"), artifacts.webpage || "", "utf8");
@@ -817,6 +803,18 @@ async function ensureCampaigns(args, options = {}) {
   }
 }
 
+// Loads the rendered content bundle the prepare step wrote into the artifact
+// (content-render.json) — the exact strings the content-review pass reviewed and
+// that populate transfers verbatim. Falls back to rendering locally via the same
+// shared module when the artifact predates this step, so older runs and local
+// debugging still work without re-authoring content in a second place.
+async function loadRenderedContent(runDir, event) {
+  const path = join(runDir, "content-render.json");
+  if (existsSync(path)) return readJson(path);
+  console.log("content-render.json not found; rendering content locally from event.json.");
+  return renderPublishedContent({ event, speakers: normalizeEventSpeakers(event) });
+}
+
 async function populateDraft(args) {
   const runDir = resolveRunDir(args);
   const [manifest, rawEvent] = await Promise.all([readJson(join(runDir, "manifest.json")), readJson(join(runDir, "event.json"))]);
@@ -824,16 +822,17 @@ async function populateDraft(args) {
   if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
 
   const event = normalizeEventFields(rawEvent);
+  const rendered = await loadRenderedContent(runDir, event);
   await populateEventSettingsViaSettingsPage({
     eventId,
     event,
     timezone: getConfig({ timezone: args.timezone }).timezone,
     headless: !args.headed
   });
-  const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId });
+  const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId, rendered });
   const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
   const speakersResult = await populateSpeakers({ ...args, run: runDir }, { manifest, event, eventId });
-  const pageResult = await populatePage({ ...args, run: runDir }, { manifest, event, eventId });
+  const pageResult = await populatePage({ ...args, run: runDir }, { manifest, event, eventId, rendered });
   const bannerResult = await populateBanner({ ...args, run: runDir }, { manifest, eventId });
   manifest.status = "draft_populated";
   manifest.glueUp = {
@@ -889,9 +888,10 @@ async function populateSummary(args, options = {}) {
   const eventId = options.eventId || manifest?.glueUp?.eventId;
   if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
 
+  const rendered = options.rendered || (await loadRenderedContent(runDir, event));
   const populated = await populateEventSummaryViaSummaryPage({
     eventId,
-    event,
+    summaryHtml: rendered.summaryHtml,
     headless: !args.headed
   });
   if (!populated) return null;
@@ -960,10 +960,13 @@ async function populatePage(args, options = {}) {
   const eventId = options.eventId || manifest?.glueUp?.eventId;
   if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
 
+  const rendered = options.rendered || (await loadRenderedContent(runDir, event));
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   const value = await populateEventPageContentViaDesignPage({
     eventId,
-    event,
+    scheduleHtml: rendered.pageScheduleHtml,
+    enableSpeakers: rendered.enableSpeakers,
+    widgets: rendered.widgets,
     cookie: auth.cookie,
     csrfToken: auth.csrfToken,
     orgId: auth.orgId
@@ -1037,7 +1040,8 @@ async function populateCampaigns(args) {
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   printAuthNote(auth);
   const normalizedEvent = normalizeEventFields(event);
-  const speakersHtml = buildCampaignSpeakersHtml(normalizedEvent);
+  const rendered = await loadRenderedContent(runDir, normalizedEvent);
+  const speakersHtml = rendered.campaignSpeakersHtml;
   for (const campaign of targetCampaigns) {
     const planned = CAMPAIGN_PLAN.find((item) => item.key === campaign.key);
     if (planned) {
@@ -1564,104 +1568,25 @@ async function populateEventBannerViaDesignPage({ eventId, bannerPath, cookie, c
 // True when it names a schedule/agenda and includes a time, or simply lists two
 // or more clock times (e.g. "7:00 PM … 8:30 PM"). Used to avoid adding a second
 // schedule section that restates what the summary already says.
-function descriptionHasSchedule(event) {
-  const text = String(event?.description || "");
-  if (!text) return false;
-  const clockTimes = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi) || [];
-  if (clockTimes.length >= 2) return true;
-  return /\b(?:schedule|agenda|run of show)\b/i.test(text) && clockTimes.length >= 1;
-}
-
-// Builds the schedule HTML for block 1 from the event's public agenda rows.
-// Each row renders as its time range plus any label; internal setup/cleanup rows
-// are already excluded by selectPublicAgenda.
-function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
-  // `event.agenda` is only set at extraction time, and normalizeEventFields does
-  // not backfill it, so derive the agenda from the raw "time" field when missing
-  // (e.g. older run artifacts). This keeps the schedule block populated.
-  const agenda =
-    Array.isArray(event?.agenda) && event.agenda.length
-      ? event.agenda
-      : parseEventAgenda(rawEventField(event, ["time", "schedule", "agenda", "run of show"]));
-  const rows = selectPublicAgenda(agenda);
-  // A full "Schedule" section only earns its place when there's a real
-  // multi-row run-of-show. For a single overall time ("7-9PM"), a Schedule
-  // heading just restates the time, so use a compact emoji where/when block
-  // instead. If the summary already embeds a schedule, never add our own rows.
-  const isMultiline = rows.length >= 2 && !descriptionHasSchedule(event);
-
-  const parts = [];
-  if (isMultiline) {
-    parts.push("<p><strong>Schedule</strong></p>");
-    for (const row of rows) {
-      const range = formatAgendaRange(row);
-      if (!range) continue;
-      const label = row.label ? `&nbsp;&ndash;&nbsp;${escapeHtml(row.label)}` : "";
-      parts.push(`<p><strong>${range}</strong>${label}</p>`);
-    }
-  } else {
-    const whereWhen = buildEventWhereWhenHtml(event, rows);
-    if (whereWhen) parts.push(whereWhen);
-  }
-  if (includeJoinBlurb) parts.push(YCP_JOIN_BLURB);
-  return parts.join("");
-}
-
-// Compact "where/when" block for events without a multi-row schedule, e.g.:
-//   📅 July 31 | 7:00–9:00 PM
-//   📍 St. Thomas the Apostle – West Hartford, CT
-function buildEventWhereWhenHtml(event, rows = []) {
-  const parts = [];
-  const date = formatEventDate(event?.eventDate);
-  const range = rows.length
-    ? formatAgendaRange({ startTime: rows[0].startTime, endTime: rows[rows.length - 1].endTime })
-    : "";
-  const when = [date, range].filter(Boolean).join(" | ");
-  if (when) parts.push(`<p>📅 ${escapeHtml(when)}</p>`);
-  const where = buildEventVenueLine(event);
-  if (where) parts.push(`<p>📍 ${where}</p>`);
-  return parts.join("");
-}
-
-// "Venue Name – City, ST" from the event venue/address text, falling back to
-// just the name when no city/state line is present.
-function buildEventVenueLine(event) {
-  const venue = normalizeEventVenue(event);
-  if (!venue.name) return "";
-  let locale = "";
-  for (const line of String(venue.full || "").split(/\n+/)) {
-    const match = /^(.+?),?\s+([A-Z]{2})\s+\d{5}/.exec(line.trim());
-    if (match) {
-      locale = `${match[1].replace(/,$/, "").trim()}, ${match[2]}`;
-      break;
-    }
-  }
-  if (!locale && venue.city) locale = venue.city;
-  return locale ? `${escapeHtml(venue.name)} &ndash; ${escapeHtml(locale)}` : escapeHtml(venue.name);
-}
-
-// "2026-07-31" -> "July 31".
-function formatEventDate(iso) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
-  if (!match) return "";
-  const months = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-  ];
-  return `${months[Number(match[2]) - 1]} ${Number(match[3])}`;
-}
-
 // Writes the public event page content blocks via `publicPageSubmit`. Requires
 // the page-embedded CSRF token (the same one the banner step uses); the cookie
-// token alone is rejected by the publishing endpoints.
-async function populateEventPageContentViaDesignPage({ eventId, event, cookie, csrfToken, orgId }) {
+// token alone is rejected by the publishing endpoints. Transfers the precomputed
+// schedule HTML verbatim — the content is rendered in `prepare`, not here.
+async function populateEventPageContentViaDesignPage({
+  eventId,
+  scheduleHtml,
+  enableSpeakers,
+  widgets = PUBLIC_PAGE_WIDGETS,
+  cookie,
+  csrfToken,
+  orgId
+}) {
   const currentPath = `/events/${eventId}/publishing/website/design/`;
   const pageCsrf = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
-  const scheduleHtml = buildEventScheduleHtml(event);
   const content = [
     { type: "summary", id: "" },
     ...(scheduleHtml ? [{ type: "html", id: "", value: scheduleHtml }] : []),
-    ...PUBLIC_PAGE_WIDGETS.map((type) => ({ type, id: "" }))
+    ...widgets.map((type) => ({ type, id: "" }))
   ];
   const payload = await postGlueUpAjax({
     path: `/events/${eventId}/publishing/website/pages/ajax`,
@@ -1683,7 +1608,7 @@ async function populateEventPageContentViaDesignPage({ eventId, event, cookie, c
   // sidebar, and restating it as a full page section is redundant (matches how
   // past events were configured).
   const sectionsToEnable = [];
-  if (normalizeEventSpeakers(event).length) sectionsToEnable.push("speakers");
+  if (enableSpeakers) sectionsToEnable.push("speakers");
   for (const id of sectionsToEnable) {
     await postGlueUpAjax({
       path: `/events/${eventId}/publishing/website/design/ajax`,
@@ -1781,21 +1706,6 @@ function imageDimensions(bytes) {
 }
 
 // Parses the raw speaker field into structured entries, dropping TBD placeholders.
-// Renders the event's parsed speakers as an HTML list for the invitation
-// campaign email body. Returns null when there are no non-TBD speakers.
-function buildCampaignSpeakersHtml(event) {
-  const speakers = normalizeEventSpeakers(event);
-  if (!speakers.length) return null;
-  const items = speakers
-    .map((speaker) => {
-      const name = escapeHtml(speaker.fullName);
-      const detail = [speaker.position, speaker.company].filter(Boolean).join(", ");
-      return `<li><strong>${name}</strong>${detail ? `&nbsp;&ndash;&nbsp;${escapeHtml(detail)}` : ""}</li>`;
-    })
-    .join("");
-  return `<p><strong>Featured Speakers</strong></p><ul>${items}</ul>`;
-}
-
 function normalizeEventSpeakers(event) {
   const rawSpeakers = Array.isArray(event?.speakers) && event.speakers.length
     ? event.speakers
@@ -1985,8 +1895,8 @@ async function fillFirstVisible(page, selectors, value) {
 // The summary `about` field is a Quill rich-text editor (div.ql-editor) saved via
 // the StandardForm action POST /events/<eventId>/publishing/content/summary/ajax.
 // Returns true when a description was written, false when event.description is empty.
-async function populateEventSummaryViaSummaryPage({ eventId, event, headless }) {
-  const html = descriptionToHtml(event?.description);
+async function populateEventSummaryViaSummaryPage({ eventId, summaryHtml, headless }) {
+  const html = summaryHtml || "";
   if (!html) return false;
 
   const { chromium } = await import("playwright");
@@ -2052,26 +1962,6 @@ async function populateEventSummaryViaSummaryPage({ eventId, event, headless }) 
   } finally {
     await context.close().catch(() => {});
   }
-}
-
-// Converts plain-text description (blank-line separated) into the paragraph HTML
-// the Glue Up Quill editor stores in the summary `about` field.
-function descriptionToHtml(description) {
-  const text = typeof description === "string" ? description.trim() : "";
-  if (!text) return "";
-  return text
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
-    .join("");
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 // Plain text of the description HTML, for comparing against the reloaded editor.

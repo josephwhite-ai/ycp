@@ -43,6 +43,8 @@ The current implementation:
 
 The agent should not design new event pages or email campaigns from scratch. Glue Up is treated as the source of approved event and campaign templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
 
+All final public-facing copy is rendered during `prepare` (in `src/generate/eventContent.js`) and stored in the run as `content-render.json`, so the proofreading pass reviews exactly what will be published. `populate` is a transfer agent: it pushes those precomputed strings to Glue Up rather than re-authoring them. (If an older artifact lacks `content-render.json`, `populate` renders once locally via the same module.)
+
 Current approved template taxonomy:
 
 - St Joseph Saturdays: Glue Up Offline blueprint `90664`
