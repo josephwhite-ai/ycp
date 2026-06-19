@@ -2,10 +2,15 @@ import { selectEventTemplate } from "../templates/eventTypes.js";
 
 const REQUIRED_EVENT_FIELDS = ["eventName", "eventDate"];
 
-export function validateEventRun({ event, artifacts, config }) {
+export function validateEventRun({ event, artifacts, config, speakerPhotos = [] }) {
   const errors = [];
   const warnings = [];
   const templateSelection = selectEventTemplate(event);
+  const speakerImagesForReview = speakerPhotos.filter(
+    (photo) =>
+      photo.sourceUrl ||
+      String(photo.source || "").startsWith("google-image-search:")
+  );
 
   for (const field of REQUIRED_EVENT_FIELDS) {
     if (!event[field]) errors.push(`Missing required event field: ${field}`);
@@ -70,7 +75,8 @@ export function validateEventRun({ event, artifacts, config }) {
           timezone: config.timezone
         }
       : null,
-    templateSelection
+    templateSelection,
+    speakerImagesForReview
   };
 }
 
@@ -140,6 +146,20 @@ export function validationReport(validation) {
       );
     } else {
       lines.push("Selected: none");
+    }
+    lines.push("");
+  }
+
+  if (validation.speakerImagesForReview?.length) {
+    lines.push("## Speaker Image Review", "");
+    lines.push("These image-search fallbacks passed the metadata confidence threshold. Source details are retained for review.", "");
+    for (const photo of validation.speakerImagesForReview) {
+      const sourceUrl = photo.sourceUrl || String(photo.source || "").replace(/^google-image-search:/, "");
+      const reasons = photo.confidence?.reasons?.length
+        ? `; confidence: ${photo.confidence.reasons.join(", ")}`
+        : "";
+      const context = photo.contextUrl ? `; [source page](${photo.contextUrl})` : "";
+      lines.push(`- ${photo.fullName}: [source image](${sourceUrl}) (${photo.photoFile})${context}${reasons}`);
     }
     lines.push("");
   }

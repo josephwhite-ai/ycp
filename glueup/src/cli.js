@@ -16,6 +16,7 @@ import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsT
 import { parseEventAgenda, selectPublicAgenda, formatAgendaRange } from "./extract/agenda.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
+import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
@@ -165,7 +166,7 @@ async function prepare(args) {
     return null;
   });
   const artifacts = await generateArtifacts({ event, photos, config });
-  const validation = validateEventRun({ event, artifacts, config });
+  const validation = validateEventRun({ event, artifacts, config, speakerPhotos });
 
   const manifest = {
     preparedAt: new Date().toISOString(),
@@ -205,6 +206,8 @@ async function prepare(args) {
 // files are also supported. Speakers with no matching photo are skipped (partial
 // coverage is expected). Returns [{ fullName, firstName, lastName, position,
 // company, photoFile }] for matched speakers; photoFile is relative to runDir.
+// Missing or unusable Drive photos fall back to Google Custom Search. Only
+// high-confidence metadata matches are accepted and surfaced in validation.
 // Collects recent banner candidate images from the shared photo-library drive,
 // walking most-recent year -> most-recent event subfolders (skipping utility
 // folders) and taking the newest images first, up to a small candidate cap.
@@ -307,12 +310,8 @@ async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
     f.mimeType?.includes("folder")
   );
   const speakerFolder = subfolders.find((f) => SPEAKER_FOLDER_RE.test(f.name));
-  if (!speakerFolder) {
-    console.log("No speaker/bio subfolder found in the event folder; skipping speaker photos.");
-    return [];
-  }
-
-  const files = await drive.listChildren(speakerFolder.id);
+  if (!speakerFolder) console.log("No speaker/bio subfolder found in the event folder.");
+  const files = speakerFolder ? await drive.listChildren(speakerFolder.id) : [];
   const outDir = join(runDir, "speaker-photos");
   await mkdir(outDir, { recursive: true });
 
@@ -321,13 +320,19 @@ async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
     const file = matchSpeakerFile(files, speaker);
     if (!file) {
       console.log(`No photo file matched for speaker "${speaker.fullName}".`);
+      const fallback = await saveSpeakerImageSearchFallback({ speaker, runDir });
+      if (fallback) results.push(fallback);
       continue;
     }
     const image = await extractSpeakerImage(drive, file).catch((error) => {
       console.log(`Could not extract photo for "${speaker.fullName}": ${error.message}`);
       return null;
     });
-    if (!image) continue;
+    if (!image) {
+      const fallback = await saveSpeakerImageSearchFallback({ speaker, runDir });
+      if (fallback) results.push(fallback);
+      continue;
+    }
 
     const photoFile = join("speaker-photos", `${slugify(speaker.fullName)}.${image.ext}`);
     await writeFile(join(runDir, photoFile), image.bytes);
@@ -343,6 +348,28 @@ async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
     console.log(`Saved speaker photo: ${speaker.fullName} -> ${photoFile} (from "${file.name}")`);
   }
   return results;
+}
+
+async function saveSpeakerImageSearchFallback({ speaker, runDir }) {
+  const image = await findSpeakerHeadshot({ speaker });
+  if (!image) return null;
+  const photoFile = join("speaker-photos", `${slugify(speaker.fullName)}.${image.ext}`);
+  await writeFile(join(runDir, photoFile), image.bytes);
+  console.log(
+    `Saved high-confidence Google image result: ${speaker.fullName} -> ${photoFile} (${image.confidence.reasons.join("; ")})`
+  );
+  return {
+    fullName: speaker.fullName,
+    firstName: speaker.firstName,
+    lastName: speaker.lastName,
+    position: speaker.position,
+    company: speaker.company,
+    photoFile,
+    source: `google-image-search:${image.sourceUrl}`,
+    sourceUrl: image.sourceUrl,
+    contextUrl: image.contextUrl,
+    confidence: image.confidence
+  };
 }
 
 // Finds the file in the speaker folder that best matches a speaker, by last name
@@ -410,11 +437,12 @@ async function validate(args) {
   if (!runDir) throw new Error("Missing --run path.");
 
   const config = getConfig({ timezone: args.timezone });
-  const [event, webpage, weekBefore, dayBefore] = await Promise.all([
+  const [event, webpage, weekBefore, dayBefore, speakerPhotos] = await Promise.all([
     readJson(join(runDir, "event.json")),
     readFile(join(runDir, "webpage.md"), "utf8"),
     readFile(join(runDir, "email-week-before.md"), "utf8"),
-    readFile(join(runDir, "email-day-before.md"), "utf8")
+    readFile(join(runDir, "email-day-before.md"), "utf8"),
+    readJson(join(runDir, "speaker-photos.json")).catch(() => [])
   ]);
 
   const validation = validateEventRun({
@@ -423,7 +451,8 @@ async function validate(args) {
       webpage,
       emails: { weekBefore, dayBefore }
     },
-    config
+    config,
+    speakerPhotos
   });
 
   await writeFile(join(runDir, "validation-report.md"), validationReport(validation), "utf8");
