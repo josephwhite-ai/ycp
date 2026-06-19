@@ -164,6 +164,16 @@ npm run monthly-prepare -- --event 6 --year 2025
 npm run monthly-prepare -- --event 6 --events-folder-id 1rhIJFpQASAzxso02Gu1tvnMxXlyFiuFE
 ```
 
+Per-field repair commands (re-run a single populate step against the active draft):
+
+```bash
+npm run populate-venue -- --event 6
+npm run populate-summary -- --event 6
+npm run populate-speakers -- --event 6
+npm run populate-page -- --event 6     # public event page content blocks (summary + schedule)
+npm run populate-banner -- --event 6   # needs banner.jpg in the run dir
+```
+
 ## Event folder naming
 
 Year folders contain event folders named like `06 - June 2026 - NHH`: event index, month/year, and event type abbreviation. The leading number is the event index — a counter unique across the year — and is the only thing needed to select an event (`npm run ensure -- 6`). The month is read back from the folder name to locate that month's summary doc.
