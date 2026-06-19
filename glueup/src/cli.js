@@ -14,6 +14,7 @@ import {
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
+import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { selectEventTemplate } from "./templates/eventTypes.js";
 import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
@@ -137,6 +138,10 @@ async function prepare(args) {
   });
   console.log(`Banner candidates found: ${bannerCandidates.length}`);
   for (const c of bannerCandidates) console.log(`  ${c.year}/${c.folder}/${c.name} [${c.mimeType}] (${(c.modifiedTime || "").slice(0, 10)})`);
+  const banner = await prepareBannerImage({ drive, candidates: bannerCandidates, event, config, runDir }).catch((error) => {
+    console.log(`Banner selection failed (non-fatal): ${error.message}`);
+    return null;
+  });
   const artifacts = await generateArtifacts({ event, photos, config });
   const validation = validateEventRun({ event, artifacts, config });
 
@@ -197,16 +202,79 @@ async function gatherBannerCandidates(drive, { limit = BANNER_CANDIDATE_LIMIT } 
       .sort(byRecent);
     for (const sub of subfolders) {
       if (candidates.length >= limit) break;
-      const images = (await drive.listChildren(sub.id, { driveId }))
+      const images = (await drive.listChildren(sub.id, {
+        driveId,
+        fields: "nextPageToken, files(id, name, mimeType, modifiedTime, thumbnailLink)"
+      }))
         .filter((f) => f.mimeType?.startsWith("image/"))
         .sort(byRecent);
       for (const img of images) {
-        candidates.push({ id: img.id, name: img.name, mimeType: img.mimeType, modifiedTime: img.modifiedTime, year: year.name, folder: sub.name });
+        candidates.push({
+          id: img.id,
+          name: img.name,
+          mimeType: img.mimeType,
+          modifiedTime: img.modifiedTime,
+          thumbnailLink: img.thumbnailLink || "",
+          year: year.name,
+          folder: sub.name
+        });
         if (candidates.length >= limit) break;
       }
     }
   }
   return candidates;
+}
+
+// Picks one banner from the candidates via AI vision (ranking cheap Drive
+// thumbnails, never converting all of them), then downloads only the winner's
+// original and converts it to a web-ready JPEG. Writes banner.jpg + banner.json
+// into the run; populate's banner step uploads them later. Falls back to the
+// newest candidate when ranking is unavailable so a banner still gets produced.
+async function prepareBannerImage({ drive, candidates, event, config, runDir }) {
+  if (!candidates?.length) return null;
+
+  const selection = await selectBannerCandidate({ drive, candidates, event, config });
+  let chosen = selection.chosen;
+  if (chosen) {
+    console.log(`Banner chosen: ${chosen.year}/${chosen.folder}/${chosen.name} — ${selection.reason}`);
+  } else {
+    chosen = [...candidates].sort((a, b) => String(b.modifiedTime || "").localeCompare(String(a.modifiedTime || "")))[0];
+    console.log(`Banner: ${selection.reason}; falling back to newest candidate ${chosen.name}.`);
+  }
+
+  const original = await drive.downloadFile(chosen.id);
+  const { bytes, ext } = await toBannerImage(original, chosen);
+  const bannerFile = `banner.${ext}`;
+  await writeFile(join(runDir, bannerFile), bytes);
+
+  const meta = {
+    file: bannerFile,
+    sourceId: chosen.id,
+    sourceName: chosen.name,
+    sourceMimeType: chosen.mimeType,
+    folder: `${chosen.year}/${chosen.folder}`,
+    reason: selection.reason,
+    ranking: selection.ranking,
+    selectedAt: new Date().toISOString()
+  };
+  await writeJson(join(runDir, "banner.json"), meta);
+  console.log(`Saved banner -> ${join(runDir, bannerFile)} (${bytes.length} bytes)`);
+  return meta;
+}
+
+// Converts the chosen original to a web-ready banner. HEIC/HEIF iPhone photos are
+// converted to JPEG (heic-convert is loaded lazily, so prepare never pulls the
+// wasm decoder unless a HEIC actually wins); PNGs are kept; anything else is saved
+// as .jpg. resolveBannerPath accepts banner.jpg/.jpeg/.png.
+async function toBannerImage(bytes, candidate) {
+  const isHeic = /heic|heif/i.test(candidate.mimeType || "") || /\.(heic|heif)$/i.test(candidate.name || "");
+  if (isHeic) {
+    const heicConvert = (await import("heic-convert")).default;
+    const out = await heicConvert({ buffer: bytes, format: "JPEG", quality: 0.9 });
+    return { bytes: Buffer.from(out), ext: "jpg" };
+  }
+  if (/png/i.test(candidate.mimeType || "")) return { bytes, ext: "png" };
+  return { bytes, ext: "jpg" };
 }
 
 async function gatherSpeakerPhotos({ drive, eventFolder, event, runDir }) {
