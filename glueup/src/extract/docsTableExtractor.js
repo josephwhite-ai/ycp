@@ -1,5 +1,7 @@
 import { parseEventAgenda } from "./agenda.js";
 
+const NO_SPEAKER_RE = /^(?:tbd|n\/?a|none|not applicable)$/i;
+
 export function extractEventFromGoogleDoc(doc) {
   const tables = [];
   const paragraphs = [];
@@ -146,7 +148,7 @@ function splitSpeakerEntries(value) {
     .replace(/\u000b/g, "\n")
     .split(/\n|;/)
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter((item) => item && !NO_SPEAKER_RE.test(item));
 }
 
 function normalizeDate(value) {
