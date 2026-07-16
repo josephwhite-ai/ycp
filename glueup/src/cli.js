@@ -48,6 +48,7 @@ const CURRENT_RUN_FILE = ".glueup-current-run";
 // a temporal-dead-zone error referencing them mid module-evaluation.
 const SPEAKER_FOLDER_RE = /speaker|bio|pic|photo|headshot|presenter|profile/i;
 const NO_SPEAKER_RE = /^(?:tbd|n\/?a|none|not applicable)$/i;
+const GLUEUP_EVENT_URL_RE = /https?:\/\/(?:[\w.-]+\.)?glueup\.com\/event\/[^\s<>)"']+/gi;
 const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
 // Shared "photo library" drive for event banners, organized as /<YEAR>/<event>/images.
 const PHOTO_LIBRARY_FOLDER_ID = process.env.GLUEUP_PHOTO_LIBRARY_FOLDER_ID || "0APt58RkpagPZUk9PVA";
@@ -180,6 +181,7 @@ async function prepare(args) {
       eventFolder,
       summaryDoc: docFile
     },
+    deferredGlueUpReferences: collectDeferredGlueUpReferences(event),
     status: validation.ok ? "prepared" : "needs_attention"
   };
 
@@ -220,6 +222,242 @@ function addPreparedSpeakerOverride(event, additionalSpeaker) {
   event.speakers = [...parsedSpeakers, speaker, "TBD"];
   console.log(`Added prepare-only speaker override: ${speaker}`);
   return event;
+}
+
+function collectDeferredGlueUpReferences(event) {
+  const sources = [
+    { field: "description", value: event?.description },
+    { field: "registrationUrl", value: event?.registrationUrl },
+    ...Object.entries(event?.rawFields || {}).map(([field, value]) => ({ field, value }))
+  ];
+  const seen = new Set();
+  const references = [];
+  for (const source of sources) {
+    const value = String(source.value || "");
+    if (!value) continue;
+    for (const sourceUrl of extractGlueUpEventUrls(value)) {
+      const normalizedUrl = normalizeGlueUpEventUrl(sourceUrl);
+      if (seen.has(normalizedUrl)) continue;
+      seen.add(normalizedUrl);
+      const sourceEventId = extractGlueUpEventId(normalizedUrl);
+      references.push({
+        key: `glueup-reference-${references.length + 1}`,
+        type: inferDeferredGlueUpReferenceType(value),
+        status: "pending",
+        sourceUrl: normalizedUrl,
+        sourceEventId,
+        detectedIn: source.field,
+        placeholders: {
+          sourceEventId: sourceEventId || null,
+          sourceEventUrl: normalizedUrl,
+          pageTemplate: null
+        },
+        note: "Resolved locally during ensure after an authenticated Glue Up session is available."
+      });
+    }
+  }
+  return references;
+}
+
+function extractGlueUpEventUrls(value) {
+  return Array.from(String(value || "").matchAll(GLUEUP_EVENT_URL_RE), ([match]) => match.replace(/[.,;:!?]+$/g, ""));
+}
+
+function normalizeGlueUpEventUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return String(value || "").trim();
+  }
+}
+
+function inferDeferredGlueUpReferenceType(context) {
+  return /\b(?:template|follow|copy|match|exact|same as|model)\b/i.test(String(context || ""))
+    ? "pageTemplate"
+    : "glueUpEventReference";
+}
+
+function extractGlueUpEventId(value) {
+  const match = /\/event\/(?:[^/?#]+-)?(\d+)(?:[/?#]|$)/i.exec(String(value || ""));
+  return match ? match[1] : null;
+}
+
+async function resolveDeferredGlueUpReferences({ runDir, auth }) {
+  const manifestPath = join(runDir, "manifest.json");
+  const manifest = await readJson(manifestPath);
+  let references = Array.isArray(manifest.deferredGlueUpReferences) ? manifest.deferredGlueUpReferences : [];
+  let changed = false;
+  if (!references.length) {
+    const event = await readJson(join(runDir, "event.json")).catch(() => null);
+    references = collectDeferredGlueUpReferences(event);
+    if (references.length) {
+      manifest.deferredGlueUpReferences = references;
+      changed = true;
+    }
+  }
+  if (!references.length || !auth) return;
+
+  const resolved = [];
+  for (const reference of references) {
+    if (reference.status === "resolved") {
+      resolved.push(reference);
+      continue;
+    }
+    if (reference.type !== "pageTemplate") {
+      resolved.push({ ...reference, status: reference.status || "pending" });
+      continue;
+    }
+    try {
+      const pageTemplate = await resolveGlueUpPageTemplateReference({ reference, cookie: auth.cookie });
+      resolved.push({
+        ...reference,
+        status: "resolved",
+        resolvedAt: new Date().toISOString(),
+        placeholders: {
+          ...(reference.placeholders || {}),
+          pageTemplate: {
+            status: "filled",
+            source: pageTemplate.source,
+            blockCount: pageTemplate.content.length
+          }
+        },
+        resolved: {
+          ...(reference.resolved || {}),
+          pageTemplate
+        },
+        lastError: null
+      });
+      console.log(`Resolved Glue Up page-template reference: ${reference.sourceUrl}`);
+      changed = true;
+    } catch (error) {
+      resolved.push({
+        ...reference,
+        status: "needs_resolution",
+        lastError: error.message,
+        checkedAt: new Date().toISOString()
+      });
+      console.log(`Could not resolve Glue Up reference ${reference.sourceUrl}: ${error.message}`);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    manifest.deferredGlueUpReferences = resolved;
+    await writeJson(manifestPath, manifest);
+  }
+}
+
+async function resolveGlueUpPageTemplateReference({ reference, cookie }) {
+  const sourceEventId = reference.sourceEventId || extractGlueUpEventId(reference.sourceUrl);
+  if (!sourceEventId) throw new Error("Could not infer source Glue Up event ID.");
+  const path = `/events/${sourceEventId}/publishing/website/design/`;
+  const html = await fetchGlueUpPageHtml({ path, cookie });
+  const pageState = extractGlueUpPublicPageState(html);
+  if (!pageState?.content?.length) {
+    throw new Error("Could not find source page content in the Glue Up design page.");
+  }
+  return {
+    source: {
+      eventId: sourceEventId,
+      sourceUrl: reference.sourceUrl,
+      adminPath: path,
+      pageID: pageState.pageID || "home",
+      title: pageState.title || "Event Details"
+    },
+    content: pageState.content.map((block) => cloneGlueUpPageBlockForTarget(block))
+  };
+}
+
+function extractGlueUpPublicPageState(html) {
+  for (const candidate of htmlJsonCandidates(html)) {
+    const content = extractJsonArrayForKey(candidate, "content");
+    if (!Array.isArray(content) || !content.some((block) => block?.type === "summary" || block?.type === "html")) continue;
+    return {
+      pageID: extractJsonStringForKey(candidate, "pageID") || "home",
+      title: extractJsonStringForKey(candidate, "title") || "Event Details",
+      content
+    };
+  }
+  return null;
+}
+
+function htmlJsonCandidates(html) {
+  const text = String(html || "");
+  return [
+    text,
+    text
+      .replace(/&quot;/g, '"')
+      .replace(/&#34;/g, '"')
+      .replace(/&amp;/g, "&")
+      .replace(/\\"/g, '"')
+  ];
+}
+
+function extractJsonArrayForKey(text, key) {
+  const keyPattern = new RegExp(`"${key}"\\s*:\\s*\\[`, "g");
+  let match;
+  while ((match = keyPattern.exec(text))) {
+    const start = match.index + match[0].lastIndexOf("[");
+    const end = findMatchingJsonBracket(text, start, "[", "]");
+    if (end === -1) continue;
+    const raw = text.slice(start, end + 1);
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // Keep scanning; Glue Up may include several unrelated content keys.
+    }
+  }
+  return null;
+}
+
+function extractJsonStringForKey(text, key) {
+  const match = new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, "i").exec(text);
+  if (!match) return null;
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
+}
+
+function findMatchingJsonBracket(text, start, open, close) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === open) {
+      depth += 1;
+    } else if (char === close) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function cloneGlueUpPageBlockForTarget(value) {
+  if (Array.isArray(value)) return value.map((item) => cloneGlueUpPageBlockForTarget(item));
+  if (!value || typeof value !== "object") return value;
+  const clone = {};
+  for (const [key, nested] of Object.entries(value)) {
+    clone[key] = key === "id" ? "" : cloneGlueUpPageBlockForTarget(nested);
+  }
+  return clone;
 }
 
 // Downloads a headshot for each parsed speaker from the event's speaker/bio
@@ -495,6 +733,7 @@ async function ensureWorkflow(args) {
   if (args.dryRun) return;
 
   await ensureCampaigns({ ...args, run: ensured.runDir }, { auth });
+  await resolveDeferredGlueUpReferences({ runDir: ensured.runDir, auth });
   const updated = await readJson(join(ensured.runDir, "manifest.json"));
   console.log(`\nGlue Up shells are ensured for ${ensured.runDir}.`);
   if (updated?.glueUp?.eventUrl) console.log(`Event URL: ${updated.glueUp.eventUrl}`);
@@ -977,12 +1216,14 @@ async function populatePage(args, options = {}) {
   if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
 
   const rendered = options.rendered || (await loadRenderedContent(runDir, event));
+  const sourcePageTemplate = getResolvedGlueUpPageTemplate(manifest);
   const auth = await ensureGlueUpAuth({ headless: !args.headed });
   const value = await populateEventPageContentViaDesignPage({
     eventId,
     scheduleHtml: rendered.pageScheduleHtml,
     enableSpeakers: rendered.enableSpeakers,
     widgets: rendered.widgets,
+    sourcePageTemplate,
     cookie: auth.cookie,
     csrfToken: auth.csrfToken,
     orgId: auth.orgId
@@ -996,6 +1237,12 @@ async function populatePage(args, options = {}) {
     await writeJson(join(runDir, "manifest.json"), manifest);
   }
   return { populatedAt };
+}
+
+function getResolvedGlueUpPageTemplate(manifest) {
+  const references = Array.isArray(manifest?.deferredGlueUpReferences) ? manifest.deferredGlueUpReferences : [];
+  return references.find((reference) => reference.type === "pageTemplate" && reference.status === "resolved" && reference.resolved?.pageTemplate)
+    ?.resolved?.pageTemplate || null;
 }
 
 async function populateBanner(args, options = {}) {
@@ -1593,29 +1840,42 @@ async function populateEventPageContentViaDesignPage({
   scheduleHtml,
   enableSpeakers,
   widgets = PUBLIC_PAGE_WIDGETS,
+  sourcePageTemplate = null,
   cookie,
   csrfToken,
   orgId
 }) {
   const currentPath = `/events/${eventId}/publishing/website/design/`;
   const pageCsrf = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
-  const content = [
-    { type: "summary", id: "" },
-    ...(scheduleHtml ? [{ type: "html", id: "", value: scheduleHtml }] : []),
-    ...widgets.map((type) => ({ type, id: "" }))
-  ];
+  const content = sourcePageTemplate?.content?.length
+    ? sourcePageTemplate.content.map((block) => cloneGlueUpPageBlockForTarget(block))
+    : [
+        { type: "summary", id: "" },
+        ...(scheduleHtml ? [{ type: "html", id: "", value: scheduleHtml }] : []),
+        ...widgets.map((type) => ({ type, id: "" }))
+      ];
   const payload = await postGlueUpAjax({
     path: `/events/${eventId}/publishing/website/pages/ajax`,
     currentPath,
     refererPath: currentPath,
     action: "publicPageSubmit",
-    data: { language: "en", pageID: "home", content, submit: "save", title: "Event Details" },
+    data: {
+      language: "en",
+      pageID: sourcePageTemplate?.source?.pageID || "home",
+      content,
+      submit: "save",
+      title: sourcePageTemplate?.source?.title || "Event Details"
+    },
     cookie,
     csrfToken: pageCsrf,
     orgId
   });
   const blocks = payload?.data?.value?.content?.length || 0;
-  console.log(`Populated event page content (${blocks} blocks; schedule ${scheduleHtml ? "set" : "skipped"})`);
+  console.log(
+    sourcePageTemplate
+      ? `Populated event page content from Glue Up template reference (${blocks} blocks; source ${sourcePageTemplate.source.sourceUrl})`
+      : `Populated event page content (${blocks} blocks; schedule ${scheduleHtml ? "set" : "skipped"})`
+  );
 
   // Sections default to hidden on the public page even when their content is
   // populated, so explicitly enable the ones we filled. The toggle is the design
