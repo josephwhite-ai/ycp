@@ -47,6 +47,7 @@ const CURRENT_RUN_FILE = ".glueup-current-run";
 // Declared before the top-level dispatch below so dispatched functions don't hit
 // a temporal-dead-zone error referencing them mid module-evaluation.
 const SPEAKER_FOLDER_RE = /speaker|bio|pic|photo|headshot|presenter|profile/i;
+const NO_SPEAKER_RE = /^(?:tbd|n\/?a|none|not applicable)$/i;
 const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
 // Shared "photo library" drive for event banners, organized as /<YEAR>/<event>/images.
 const PHOTO_LIBRARY_FOLDER_ID = process.env.GLUEUP_PHOTO_LIBRARY_FOLDER_ID || "0APt58RkpagPZUk9PVA";
@@ -1704,8 +1705,6 @@ function imageDimensions(bytes) {
   }
   return null;
 }
-
-const NO_SPEAKER_RE = /^(?:tbd|n\/?a|none|not applicable)$/i;
 
 // Parses the raw speaker field into structured entries, dropping no-speaker placeholders.
 function normalizeEventSpeakers(event) {
