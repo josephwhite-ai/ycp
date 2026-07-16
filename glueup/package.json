@@ -11,6 +11,7 @@
     "populate-venue": "node src/cli.js populate-venue",
     "populate-summary": "node src/cli.js populate-summary",
     "populate-speakers": "node src/cli.js populate-speakers",
+    "populate-tickets": "node src/cli.js populate-tickets",
     "populate-page": "node src/cli.js populate-page",
     "populate-banner": "node src/cli.js populate-banner",
     "populate-campaigns": "node src/cli.js populate-campaigns",

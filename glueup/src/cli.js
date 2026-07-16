@@ -75,6 +75,8 @@ try {
     await populateSummaryWorkflow(args);
   } else if (command === "populate-speakers") {
     await populateSpeakersWorkflow(args);
+  } else if (command === "populate-tickets") {
+    await populateTicketsWorkflow(args);
   } else if (command === "populate-page") {
     await populatePageWorkflow(args);
   } else if (command === "populate-banner") {
@@ -171,6 +173,7 @@ async function prepare(args) {
     config
   });
   const validation = validateEventRun({ event, artifacts, config, speakerPhotos, contentReview });
+  const ticketing = collectTicketingFromEvent(event);
 
   const manifest = {
     preparedAt: new Date().toISOString(),
@@ -183,6 +186,7 @@ async function prepare(args) {
       summaryDoc: docFile
     },
     deferredGlueUpReferences: collectDeferredGlueUpReferences(event),
+    ...(ticketing ? { ticketing } : {}),
     status: validation.ok ? "prepared" : "needs_attention"
   };
 
@@ -461,6 +465,69 @@ function cloneGlueUpPageBlockForTarget(value) {
   return clone;
 }
 
+function collectTicketingFromEvent(event) {
+  const sources = [
+    { field: "description", value: event?.description },
+    ...Object.entries(event?.rawFields || {}).map(([field, value]) => ({ field, value }))
+  ].filter((source) => source.value);
+  const paymentSources = sources.filter((source) => /\b(?:ticket|price|payment|paid|fee|discount|complimentary|free|member|non[-\s]?member|\$\s*\d)/i.test(String(source.value)));
+  if (!paymentSources.length) return null;
+
+  const text = paymentSources.map((source) => String(source.value)).join("\n");
+  const lower = text.toLowerCase();
+  let memberPrice = null;
+  let publicPrice = null;
+  let basePrice = null;
+
+  for (const sentence of text.split(/\n|(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean)) {
+    const sentenceLower = sentence.toLowerCase();
+    const amounts = extractMoneyAmounts(sentence);
+    const mentionsMember = /\b(?:member|belong|belong\+)\b/i.test(sentence);
+    const mentionsNonMember = /\bnon[-\s]?members?\b/i.test(sentence);
+    if (mentionsMember && /\b(?:complimentary|free|no charge)\b/i.test(sentence)) memberPrice = 0;
+    if (mentionsNonMember && amounts.length) publicPrice = amounts[0];
+    if (mentionsMember && !mentionsNonMember && amounts.length) memberPrice = amounts[0];
+    if (/\b(?:ticket|price|cost|admission)\b/i.test(sentence) && amounts.length && !mentionsMember && !mentionsNonMember) basePrice = amounts[0];
+    const discount = /\bmember(?:s)?\b.*?\bdiscount\b/i.test(sentence) || /\bdiscount\b.*?\bmember(?:s)?\b/i.test(sentence);
+    if (discount && amounts.length && basePrice !== null) memberPrice = Math.max(0, basePrice - amounts[0]);
+    if (/fixed price|standard price|regular price/i.test(sentenceLower) && amounts.length) basePrice = amounts[0];
+  }
+
+  if (publicPrice === null && basePrice !== null) publicPrice = basePrice;
+  if (memberPrice === null && /\b(?:complimentary|free|no charge)\b.*\b(?:member|belong|belong\+)\b/i.test(lower)) memberPrice = 0;
+  if (memberPrice === null && /\b(?:member|belong|belong\+)\b.*\b(?:complimentary|free|no charge)\b/i.test(lower)) memberPrice = 0;
+  if (publicPrice === null && memberPrice === null) return null;
+
+  return {
+    status: "pending",
+    source: paymentSources.map(({ field, value }) => ({ field, value: String(value).slice(0, 1000) })),
+    currency: "USD",
+    strategy: "separate-member-and-public-ticket-prices",
+    memberPrice,
+    publicPrice,
+    paymentRequired: [memberPrice, publicPrice].some((value) => typeof value === "number" && value > 0),
+    note: "Populate updates the template's Members and Public ticket price options in Glue Up."
+  };
+}
+
+function extractMoneyAmounts(value) {
+  return Array.from(String(value || "").matchAll(/\$\s*([0-9]+(?:\.[0-9]{1,2})?)/g), (match) => Number(match[1]))
+    .filter((amount) => Number.isFinite(amount));
+}
+
+async function ensureManifestTicketing(runDir) {
+  const manifestPath = join(runDir, "manifest.json");
+  const manifest = await readJson(manifestPath);
+  if (manifest.ticketing) return manifest.ticketing;
+  const event = await readJson(join(runDir, "event.json")).catch(() => null);
+  const ticketing = collectTicketingFromEvent(event);
+  if (!ticketing) return null;
+  manifest.ticketing = ticketing;
+  await writeJson(manifestPath, manifest);
+  console.log(`Recorded ticket pricing guidance in ${manifestPath}`);
+  return ticketing;
+}
+
 // Downloads a headshot for each parsed speaker from the event's speaker/bio
 // subfolder and writes it into the run's speaker-photos/ directory. Headshots are
 // usually embedded in a per-speaker Google Doc ("… Photo and Bio"); plain image
@@ -735,6 +802,7 @@ async function ensureWorkflow(args) {
 
   await ensureCampaigns({ ...args, run: ensured.runDir }, { auth });
   await resolveDeferredGlueUpReferences({ runDir: ensured.runDir, auth });
+  await ensureManifestTicketing(ensured.runDir);
   const updated = await readJson(join(ensured.runDir, "manifest.json"));
   console.log(`\nGlue Up shells are ensured for ${ensured.runDir}.`);
   if (updated?.glueUp?.eventUrl) console.log(`Event URL: ${updated.glueUp.eventUrl}`);
@@ -783,6 +851,14 @@ async function populateSpeakersWorkflow(args) {
   await writeCurrentRun(runDir);
   await assertRunEventIsDraft({ runDir, args });
   await populateSpeakers({ ...args, run: runDir });
+}
+
+async function populateTicketsWorkflow(args) {
+  const runDir = resolveRunDir(args);
+  await assertContentReviewPassed(runDir, args);
+  await writeCurrentRun(runDir);
+  await assertRunEventIsDraft({ runDir, args });
+  await populateTickets({ ...args, run: runDir });
 }
 
 async function populatePageWorkflow(args) {
@@ -1088,6 +1164,7 @@ async function populateDraft(args) {
   const summaryResult = await populateSummary({ ...args, run: runDir }, { manifest, event, eventId, rendered });
   const venueResult = await populateVenue({ ...args, run: runDir }, { manifest, event, eventId });
   const speakersResult = await populateSpeakers({ ...args, run: runDir }, { manifest, event, eventId });
+  const ticketsResult = await populateTickets({ ...args, run: runDir }, { manifest, event, eventId });
   const pageResult = await populatePage({ ...args, run: runDir }, { manifest, event, eventId, rendered });
   const bannerResult = await populateBanner({ ...args, run: runDir }, { manifest, eventId });
   manifest.status = "draft_populated";
@@ -1097,6 +1174,7 @@ async function populateDraft(args) {
     ...(summaryResult ? { summaryPopulatedAt: summaryResult.populatedAt } : {}),
     ...(venueResult ? { venuePopulatedAt: venueResult.populatedAt, venue: venueResult.venue } : {}),
     ...(speakersResult ? { speakersPopulatedAt: speakersResult.populatedAt, speakers: speakersResult.speakers } : {}),
+    ...(ticketsResult ? { ticketsPopulatedAt: ticketsResult.populatedAt, ticketing: ticketsResult.ticketing } : {}),
     ...(pageResult ? { pagePopulatedAt: pageResult.populatedAt } : {}),
     ...(bannerResult ? { bannerPopulatedAt: bannerResult.populatedAt, banner: bannerResult.banner } : {})
   };
@@ -1207,6 +1285,51 @@ async function populateSpeakers(args, options = {}) {
     await writeJson(join(runDir, "manifest.json"), manifest);
   }
   return { populatedAt, speakers: populated };
+}
+
+async function populateTickets(args, options = {}) {
+  const runDir = resolveRunDir(args);
+  const manifest = options.manifest || (await readJson(join(runDir, "manifest.json")));
+  const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
+  const eventId = options.eventId || manifest?.glueUp?.eventId;
+  if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  let ticketing = manifest.ticketing || collectTicketingFromEvent(event);
+  if (!ticketing) {
+    console.log("Skipping ticket populate: no payment or ticket pricing guidance was found.");
+    return null;
+  }
+  ticketing = { ...ticketing, paymentRequired: [ticketing.memberPrice, ticketing.publicPrice].some((value) => typeof value === "number" && value > 0) };
+
+  const auth = await ensureGlueUpAuth({ headless: !args.headed });
+  const inventory = await inspectGlueUpTicketInventory({ eventId, headless: !args.headed });
+  const populated = await populateEventTicketsViaAjax({
+    eventId,
+    ticketing,
+    inventory,
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    orgId: auth.orgId
+  });
+
+  const populatedAt = new Date().toISOString();
+  const updatedTicketing = {
+    ...ticketing,
+    status: "populated",
+    populatedAt,
+    glueUp: populated
+  };
+  manifest.ticketing = updatedTicketing;
+  if (!options.manifest) {
+    manifest.status = "tickets_populated";
+    manifest.glueUp = {
+      ...(manifest.glueUp || {}),
+      ticketsPopulatedAt: populatedAt,
+      ticketing: updatedTicketing
+    };
+    await writeJson(join(runDir, "manifest.json"), manifest);
+  }
+  return { populatedAt, ticketing: updatedTicketing };
 }
 
 async function populatePage(args, options = {}) {
@@ -1656,6 +1779,195 @@ async function populateEventVenueViaAjax({ eventId, event, cookie, csrfToken, or
     countryCode: "US",
     geo
   };
+}
+
+async function inspectGlueUpTicketInventory({ eventId, headless }) {
+  const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
+  const { chromium } = await import("playwright");
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless,
+    viewport: { width: 1440, height: 1000 }
+  });
+  const page = context.pages()[0] || (await context.newPage());
+  try {
+    await page.goto(`${GLUEUP_BASE_URL}/events/${eventId}/setup/registration/tickets/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.waitForTimeout(1500);
+    const tickets = await page.evaluate(() =>
+      [...document.querySelectorAll('a.edit-button[href*="/setup/registration/edit/"]')].map((link) => {
+        const id = /\/edit\/(\d+)/.exec(link.getAttribute("href") || "")?.[1] || "";
+        const text = link.parentElement?.parentElement?.innerText || "";
+        const title = text.split(/\n/).map((line) => line.trim()).find(Boolean) || "";
+        return { id, title };
+      }).filter((ticket) => ticket.id && ticket.title)
+    );
+
+    const prices = [];
+    const count = await page.locator('a[data-event="Modal::editPrice"]').count();
+    for (let i = 0; i < count; i += 1) {
+      await page.locator('a[data-event="Modal::editPrice"]').nth(i).click();
+      await page.waitForTimeout(500);
+      const price = await page.locator("form:visible").first().evaluate((form) => {
+        const get = (name) => form.querySelector(`[name="${name}"]`)?.value || "";
+        return {
+          id: get("id"),
+          ticketID: get("ticketID"),
+          availableFor: get("availableFor"),
+          paymentWay: get("paymentWay"),
+          currency: get("currency") || "USD",
+          value: get("value")
+        };
+      }).catch(() => null);
+      if (price?.id && price?.ticketID) prices.push(price);
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(250);
+    }
+    return { tickets, prices };
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+async function populateEventTicketsViaAjax({ eventId, ticketing, inventory, cookie, csrfToken, orgId }) {
+  const memberTicket = findTicketByName(inventory.tickets, /members?/i);
+  const publicTicket = findTicketByName(inventory.tickets, /public|non[-\s]?members?|general/i);
+  if (ticketing.memberPrice != null && !memberTicket) throw new Error("Ticket pricing requires a Members ticket, but none was found.");
+  if (ticketing.publicPrice != null && !publicTicket) throw new Error("Ticket pricing requires a Public ticket, but none was found.");
+
+  if (ticketing.paymentRequired) {
+    await setGlueUpPaymentOptions({ eventId, cookie, csrfToken, orgId });
+  }
+
+  const updated = [];
+  if (ticketing.memberPrice != null) {
+    updated.push(await updateGlueUpTicketPrice({
+      eventId,
+      ticket: memberTicket,
+      price: findPriceForTicket(inventory.prices, memberTicket.id) || {},
+      amount: ticketing.memberPrice,
+      availableFor: "MembersOnly",
+      cookie,
+      csrfToken,
+      orgId
+    }));
+  }
+  if (ticketing.publicPrice != null) {
+    updated.push(await updateGlueUpTicketPrice({
+      eventId,
+      ticket: publicTicket,
+      price: findPriceForTicket(inventory.prices, publicTicket.id) || {},
+      amount: ticketing.publicPrice,
+      availableFor: "Anyone",
+      cookie,
+      csrfToken,
+      orgId
+    }));
+  }
+  console.log(`Populated ticket pricing: ${updated.map((item) => `${item.ticketTitle} ${formatTicketAmount(item.amount)}`).join(", ")}`);
+  return { updated };
+}
+
+function findTicketByName(tickets, pattern) {
+  return (tickets || []).find((ticket) => pattern.test(ticket.title));
+}
+
+function findPriceForTicket(prices, ticketId) {
+  return (prices || []).find((price) => String(price.ticketID) === String(ticketId));
+}
+
+async function setGlueUpPaymentOptions({ eventId, cookie, csrfToken, orgId }) {
+  const currentPath = `/events/${eventId}/setup/registration/payment/`;
+  const pageCsrfToken = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
+  await postGlueUpAjax({
+    path: `/events/${eventId}/setup/registration/payment/ajax`,
+    currentPath,
+    refererPath: currentPath,
+    action: "StandardFormSubmit",
+    data: {
+      "customFee.isEnabled": { code: "false" },
+      "placeholder.isReceiptAutoSend": false,
+      "placeholder.isInvoiceAutoGenerated": false,
+      isUseFinanceSettings: true,
+      "placeholder.companyPolicy": "",
+      isUseDefaultCompanyPolicy: true,
+      currencies: [{ code: "USD" }],
+      inKindDetails: "",
+      allowInKind: false,
+      chequePaymentDetails: "",
+      allowChequePayment: false,
+      bankTransferDetails: "",
+      bankTransferAccount: "",
+      allowBankTransfer: false,
+      allowOnlinePayment: true,
+      isFree: false,
+      submit: "save"
+    },
+    cookie,
+    csrfToken: pageCsrfToken,
+    orgId
+  });
+  console.log("Enabled Glue Up online payment for ticket pricing.");
+}
+
+async function updateGlueUpTicketPrice({ eventId, ticket, price, amount, availableFor, cookie, csrfToken, orgId }) {
+  if (!price?.id) {
+    throw new Error(`Ticket "${ticket.title}" has no existing price option to update.`);
+  }
+  const currentPath = `/events/${eventId}/setup/registration/tickets/`;
+  const pageCsrfToken = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
+  const free = Number(amount) === 0;
+  const payload = {
+    id: String(price.id || ""),
+    index: "",
+    ticketID: String(ticket.id),
+    hasCustomQuantity: false,
+    hasExpiration: false,
+    isPrimaryMemberOnly: false,
+    isSelected: false,
+    availableFor: { code: availableFor },
+    value: free ? "" : String(amount),
+    currency: { code: "USD" },
+    paymentWay: { code: free ? "Free" : "Standard" },
+    currentData: {
+      isExpired: false,
+      title: availableFor === "MembersOnly" ? "price_title_member_online" : "price_title_public_online",
+      paymentWay: price.paymentWay || (free ? "Free" : "Standard"),
+      isMemberOnly: availableFor === "MembersOnly",
+      isSelected: false,
+      isAllChaptersSelected: false,
+      hasCustomQuantity: false,
+      id: Number(price.id || 0),
+      ticketID: Number(ticket.id),
+      availableFor: price.availableFor || availableFor,
+      isPrimaryMemberOnly: false,
+      isPrimaryChapterOnly: false,
+      minQuantity: 1,
+      maxQuantity: 20,
+      currency: { code: "USD" },
+      reCreditRewardPointEnabled: false,
+      reCreditRewardPointOnCancellation: false,
+      hasExpiration: false,
+      expirationDate: "",
+      expirationTime: ""
+    }
+  };
+  await postGlueUpAjax({
+    path: `/events/${eventId}/setup/registration/tickets/ajax`,
+    currentPath,
+    refererPath: currentPath,
+    action: "editPrice",
+    data: payload,
+    cookie,
+    csrfToken: pageCsrfToken,
+    orgId
+  });
+  return { ticketId: ticket.id, ticketTitle: ticket.title, amount, availableFor, priceId: price.id || "" };
+}
+
+function formatTicketAmount(amount) {
+  return Number(amount) === 0 ? "complimentary" : `$${Number(amount).toFixed(2).replace(/\.00$/, "")}`;
 }
 
 // Adds each speaker to the draft via the speakers page's `create-manual-speaker`
@@ -2743,6 +3055,7 @@ Usage:
   npm run populate-venue   # populate only the active draft venue
   npm run populate-summary # populate only the active draft description/summary
   npm run populate-speakers # populate only the active draft speakers
+  npm run populate-tickets # populate only the active draft tickets/pricing
   npm run populate-banner  # populate only the active draft banner (needs banner.jpg in the run)
   npm run populate-campaigns # populate only the active invitation campaigns
   npm run finalize         # schedule campaigns after manual review and publish
@@ -2757,6 +3070,7 @@ Support/debug commands:
   npm run populate-venue -- --event 6
   npm run populate-summary -- --event 6
   npm run populate-speakers -- --event 6
+  npm run populate-tickets -- --event 6
   npm run populate-banner -- --event 6
   npm run populate-campaigns -- --event 6
 
