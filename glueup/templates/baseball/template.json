@@ -1,0 +1,13 @@
+{
+  "key": "baseball",
+  "label": "Baseball Event",
+  "keywords": [
+    "baseball",
+    "yard goats",
+    "dunkin park",
+    "somerset patriots"
+  ],
+  "pageTemplate": {
+    "sourceUrl": "https://ycp.glueup.com/event/hartford-yard-goats-vs-somerset-patriots-145378/"
+  }
+}
