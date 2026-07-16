@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -2494,7 +2494,7 @@ async function syncRecentPreparedArtifacts({ limit, optional = false }) {
         const slug = artifact.name.slice(ARTIFACT_PREFIX.length);
         if (existsSync(join("runs", slug, "manifest.json"))) continue;
         console.log(`Downloading reusable draft artifact ${artifact.name} from run #${run.databaseId} ...`);
-        gh(["run", "download", String(run.databaseId), "-n", artifact.name, "-D", "runs"]);
+        await downloadPreparedArtifact({ artifactName: artifact.name, runId: run.databaseId, slug });
       }
     }
   } catch (error) {
@@ -2523,7 +2523,7 @@ async function syncEvent(eventInfo, { fresh = false } = {}) {
   const { slug } = eventInfo;
   const artifact = `${ARTIFACT_PREFIX}${slug}`;
   console.log(`Downloading artifact ${artifact} into runs/ ...`);
-  gh(["run", "download", "-n", artifact, "-D", "runs"]);
+  await downloadPreparedArtifact({ artifactName: artifact, slug });
 
   const manifestPath = join("runs", slug, "manifest.json");
   if (!existsSync(manifestPath)) {
@@ -2574,7 +2574,7 @@ async function syncLatestEvent() {
   const slug = artifact.name.slice(ARTIFACT_PREFIX.length);
   const eventInfo = eventInfoFromSlug(slug);
   console.log(`Pulling latest prepared event ${eventInfo.index} (${eventInfo.year}) from run #${runId} ...`);
-  gh(["run", "download", String(runId), "-n", artifact.name, "-D", "runs"]);
+  await downloadPreparedArtifact({ artifactName: artifact.name, runId, slug });
 
   const manifestPath = join("runs", slug, "manifest.json");
   if (!existsSync(manifestPath)) {
@@ -2626,6 +2626,28 @@ async function waitForNewRun(before) {
     if (fresh) return fresh;
   }
   throw new Error("Timed out waiting for the dispatched prepare run to appear.");
+}
+
+async function downloadPreparedArtifact({ artifactName, runId = null, slug }) {
+  await mkdir("runs", { recursive: true });
+  await mkdir(".glueup-downloads", { recursive: true });
+  const tempDir = await mkdtemp(join(".glueup-downloads", `${slug}-`));
+  try {
+    const argv = ["run", "download"];
+    if (runId) argv.push(String(runId));
+    argv.push("-n", artifactName, "-D", tempDir);
+    gh(argv);
+
+    const extractedRunDir = join(tempDir, slug);
+    const manifestPath = join(extractedRunDir, "manifest.json");
+    if (!existsSync(manifestPath)) {
+      throw new Error(`Downloaded artifact ${artifactName} did not contain ${slug}/manifest.json.`);
+    }
+
+    await cp(extractedRunDir, join("runs", slug), { recursive: true, force: true });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 function gh(argv) {
