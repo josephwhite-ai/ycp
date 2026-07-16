@@ -1705,14 +1705,16 @@ function imageDimensions(bytes) {
   return null;
 }
 
-// Parses the raw speaker field into structured entries, dropping TBD placeholders.
+const NO_SPEAKER_RE = /^(?:tbd|n\/?a|none|not applicable)$/i;
+
+// Parses the raw speaker field into structured entries, dropping no-speaker placeholders.
 function normalizeEventSpeakers(event) {
   const rawSpeakers = Array.isArray(event?.speakers) && event.speakers.length
     ? event.speakers
     : splitSpeakerEntries(rawEventField(event, ["speaker (if applicable)", "speakers", "speaker", "presenter", "presenters"]));
   return rawSpeakers
     .map((speaker) => parseSpeakerEntry(speaker))
-    .filter((speaker) => speaker && !/^tbd\b/i.test(speaker.fullName));
+    .filter((speaker) => speaker && !isNoSpeakerPlaceholder(speaker.fullName));
 }
 
 function splitSpeakerEntries(value) {
@@ -1728,11 +1730,15 @@ function parseSpeakerEntry(value) {
   if (!raw) return null;
   const [namePart, ...detailParts] = raw.includes(",") ? raw.split(",") : raw.split(/\s+-\s+/);
   const fullName = cleanSingleLine(namePart);
-  if (!fullName) return null;
+  if (!fullName || isNoSpeakerPlaceholder(fullName)) return null;
   const detail = detailParts.join(raw.includes(",") ? "," : " - ").trim();
   const { position, company } = parseSpeakerDetail(detail);
   const { firstName, lastName } = splitSpeakerName(fullName);
   return { fullName, firstName, lastName, position, company, description: "" };
+}
+
+function isNoSpeakerPlaceholder(value) {
+  return NO_SPEAKER_RE.test(cleanSingleLine(value));
 }
 
 function parseSpeakerDetail(value) {
