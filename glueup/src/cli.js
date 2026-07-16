@@ -13,7 +13,7 @@ import {
 } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
-import { PUBLIC_PAGE_WIDGETS, renderPublishedContent } from "./generate/eventContent.js";
+import { PUBLIC_PAGE_WIDGETS, buildCampaignSpeakersHtml, renderPublishedContent } from "./generate/eventContent.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
@@ -811,9 +811,24 @@ async function ensureCampaigns(args, options = {}) {
 // debugging still work without re-authoring content in a second place.
 async function loadRenderedContent(runDir, event) {
   const path = join(runDir, "content-render.json");
-  if (existsSync(path)) return readJson(path);
-  console.log("content-render.json not found; rendering content locally from event.json.");
-  return renderPublishedContent({ event, speakers: normalizeEventSpeakers(event) });
+  const speakers = normalizeEventSpeakers(event);
+  if (!existsSync(path)) {
+    console.log("content-render.json not found; rendering content locally from event.json.");
+    return renderPublishedContent({ event, speakers });
+  }
+  return normalizeRenderedSpeakerContent(await readJson(path), speakers);
+}
+
+function normalizeRenderedSpeakerContent(rendered, speakers) {
+  const hasSpeakers = speakers.length > 0;
+  return {
+    ...rendered,
+    enableSpeakers: hasSpeakers,
+    campaignSpeakersHtml: buildCampaignSpeakersHtml(speakers),
+    widgets: hasSpeakers
+      ? rendered.widgets || PUBLIC_PAGE_WIDGETS
+      : (rendered.widgets || PUBLIC_PAGE_WIDGETS).filter((widget) => widget !== "speakersWidget")
+  };
 }
 
 async function populateDraft(args) {
