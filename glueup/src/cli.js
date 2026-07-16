@@ -2389,14 +2389,24 @@ async function prepareRunForDraft(args) {
 }
 
 function resolveRunDir(args) {
-  if (args.run) return args.run;
+  if (args.run) return assertRunDirExists(args.run);
   if (args.event !== undefined || args._?.[1] !== undefined) {
     const eventInfo = parseEvent(args);
-    return join("runs", eventInfo.slug);
+    return assertRunDirExists(join("runs", eventInfo.slug));
   }
   const current = readCurrentRun();
-  if (current) return current;
+  if (current) return assertRunDirExists(current);
   throw new Error("Missing run target. Run `npm run ensure -- <event-index>` first.");
+}
+
+function assertRunDirExists(runDir) {
+  const manifestPath = join(runDir, "manifest.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(
+      `Missing run file "${manifestPath}". Use the local ensure step first:\n  npm run ensure -- 6\nFor debugging only, you can pre-stage an artifact with:\n  npm run sync-run -- --event 6 --fresh`
+    );
+  }
+  return runDir;
 }
 
 function readCurrentRun() {
