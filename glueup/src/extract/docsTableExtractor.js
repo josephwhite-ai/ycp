@@ -180,20 +180,32 @@ function contentToHtml(content, doc) {
       continue;
     }
     flushList();
-    blocks.push(html ? `<p>${html}</p>` : "<p><br></p>");
+    if (html) blocks.push(`<p${alignmentAttr(paragraph)}>${html}</p>`);
   }
   flushList();
 
-  // Collapse runs of blank paragraphs and drop them from the edges, so stray
-  // empty lines in the doc don't pad the published page.
-  const isBlank = (block) => block === "<p><br></p>";
-  const collapsed = [];
+  // Google Docs spaces paragraphs apart visually, but Glue Up renders bare <p>
+  // blocks with no gap, so separate blocks with an explicit blank line — the
+  // same way existing YCP content is authored in Glue Up. Blank paragraphs in
+  // the doc collapse into that single spacer. Soft line breaks (Shift+Enter)
+  // stay tight as <br> within one paragraph.
+  const spaced = [];
   for (const block of blocks) {
-    if (isBlank(block) && (!collapsed.length || isBlank(collapsed[collapsed.length - 1]))) continue;
-    collapsed.push(block);
+    if (spaced.length) spaced.push("<p><br></p>");
+    spaced.push(block);
   }
-  while (collapsed.length && isBlank(collapsed[collapsed.length - 1])) collapsed.pop();
-  return collapsed.join("");
+  return spaced.join("");
+}
+
+// Quill marks non-default alignment with ql-align-* classes on the block, and
+// the Glue Up page ships Quill's CSS, so centered lines stay centered.
+function alignmentAttr(paragraph) {
+  const alignment = paragraph.paragraphStyle?.alignment;
+  const name =
+    alignment === "CENTER" ? "center" :
+    alignment === "END" ? "right" :
+    alignment === "JUSTIFIED" ? "justify" : "";
+  return name ? ` class="ql-align-${name}"` : "";
 }
 
 function paragraphInlineHtml(paragraph) {
