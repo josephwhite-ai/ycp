@@ -131,6 +131,15 @@ export function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) 
   return parts.join("");
 }
 
+// The summary HTML pushed to Glue Up: prefer the rich HTML captured straight
+// from the Google Doc (bold/links/lists survive, like a copy-paste), falling
+// back to rebuilding plain paragraphs for artifacts extracted before
+// descriptionHtml existed.
+export function eventSummaryHtml(event) {
+  const html = typeof event?.descriptionHtml === "string" ? event.descriptionHtml.trim() : "";
+  return html || descriptionToHtml(event?.description);
+}
+
 // Converts a plain-text description (blank-line separated) into the paragraph
 // HTML the Glue Up Quill editor stores in the summary `about` field.
 export function descriptionToHtml(description) {
@@ -165,7 +174,7 @@ export function buildCampaignSpeakersHtml(speakers) {
 export function renderPublishedContent({ event, speakers = [] }) {
   return {
     renderedAt: new Date().toISOString(),
-    summaryHtml: descriptionToHtml(event?.description),
+    summaryHtml: eventSummaryHtml(event),
     pageScheduleHtml: buildEventScheduleHtml(event),
     enableSpeakers: speakers.length > 0,
     campaignSpeakersHtml: buildCampaignSpeakersHtml(speakers),
