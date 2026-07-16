@@ -86,6 +86,28 @@ export class GoogleDriveClient {
     );
   }
 
+  // Folder owners don't always name the doc exactly "<Month> <Year> - Event
+  // Summary Sheet" — the month may be abbreviated ("Aug 2026") or the spacing
+  // may vary. Match any child named like a summary sheet, preferring one that
+  // mentions the expected month and year.
+  async findSummaryDoc(parentId, { monthName, year }) {
+    const children = await this.listChildren(parentId);
+    const sheets = children.filter((file) =>
+      normalizeName(file.name).includes("event summary sheet")
+    );
+    if (!sheets.length) return null;
+
+    const matchesMonth = (file) =>
+      nameTokens(file.name).some((token) => isMonthToken(token, monthName));
+    const matchesYear = (file) => file.name.includes(String(year));
+
+    return (
+      sheets.find((file) => matchesMonth(file) && matchesYear(file)) ||
+      sheets.find((file) => matchesMonth(file)) ||
+      (sheets.length === 1 ? sheets[0] : null)
+    );
+  }
+
   async findEventFolder(eventsFolderId, { year, index }) {
     const yearFolder = await this.findChildFolder(eventsFolderId, [
       normalizeName(String(year)),
@@ -276,6 +298,16 @@ function base64Url(value) {
 
 function normalizeName(name) {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function nameTokens(name) {
+  return normalizeName(name).split(/[^a-z]+/).filter(Boolean);
+}
+
+// "Aug", "Sept", and the full month name all identify the month: any word of
+// three or more letters that prefixes the month name counts.
+function isMonthToken(token, monthName) {
+  return token.length >= 3 && monthName.toLowerCase().startsWith(token);
 }
 
 // The leading number in an event folder name ("06 - June 2026 - NHH") is the
