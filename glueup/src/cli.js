@@ -44,6 +44,7 @@ const PREPARE_WORKFLOW = "glueup-monthly-prepare.yml";
 const ARTIFACT_PREFIX = "glueup-run-";
 const DEFAULT_REUSE_ARTIFACT_LIMIT = 20;
 const CURRENT_RUN_FILE = ".glueup-current-run";
+const SPECIAL_TEMPLATES_DIR = "templates";
 // Declared before the top-level dispatch below so dispatched functions don't hit
 // a temporal-dead-zone error referencing them mid module-evaluation.
 const SPEAKER_FOLDER_RE = /speaker|bio|pic|photo|headshot|presenter|profile/i;
@@ -174,6 +175,7 @@ async function prepare(args) {
   });
   const validation = validateEventRun({ event, artifacts, config, speakerPhotos, contentReview });
   const ticketing = collectTicketingFromEvent(event);
+  const specialTemplate = await selectSpecialTemplate(event);
 
   const manifest = {
     preparedAt: new Date().toISOString(),
@@ -186,6 +188,7 @@ async function prepare(args) {
       summaryDoc: docFile
     },
     deferredGlueUpReferences: collectDeferredGlueUpReferences(event),
+    ...(specialTemplate ? { specialTemplate } : {}),
     ...(ticketing ? { ticketing } : {}),
     status: validation.ok ? "prepared" : "needs_attention"
   };
@@ -463,6 +466,122 @@ function cloneGlueUpPageBlockForTarget(value) {
     clone[key] = key === "id" ? "" : cloneGlueUpPageBlockForTarget(nested);
   }
   return clone;
+}
+
+async function selectSpecialTemplate(event) {
+  const templates = await loadSpecialTemplates();
+  if (!templates.length) return null;
+  const haystack = normalizeTemplateText(eventSearchValues(event));
+  const matched = templates.find((template) =>
+    template.keywords.some((keyword) => haystack.includes(normalizeTemplateText([keyword])))
+  );
+  if (!matched) return null;
+  const matchedKeyword = matched.keywords.find((keyword) => haystack.includes(normalizeTemplateText([keyword])));
+  return {
+    key: matched.key,
+    label: matched.label,
+    status: "pending",
+    matchedKeyword,
+    sourcePath: matched.sourcePath,
+    pageTemplate: matched.pageTemplate || null,
+    note: "Local special template selected from templates/<keyword>; resolved locally during ensure."
+  };
+}
+
+async function loadSpecialTemplates() {
+  if (!existsSync(SPECIAL_TEMPLATES_DIR)) return [];
+  const entries = await readdir(SPECIAL_TEMPLATES_DIR, { withFileTypes: true });
+  const templates = [];
+  for (const entry of entries.filter((item) => item.isDirectory())) {
+    const key = entry.name;
+    const sourcePath = join(SPECIAL_TEMPLATES_DIR, key, "template.json");
+    const config = existsSync(sourcePath) ? await readJson(sourcePath) : {};
+    templates.push({
+      key: config.key || key,
+      label: config.label || titleCase(key.replace(/[-_]+/g, " ")),
+      keywords: [...new Set([key, ...(config.keywords || [])])],
+      pageTemplate: config.pageTemplate || null,
+      sourcePath
+    });
+  }
+  return templates;
+}
+
+async function resolveSpecialTemplate({ runDir, auth }) {
+  const manifestPath = join(runDir, "manifest.json");
+  const manifest = await readJson(manifestPath);
+  if (!manifest.specialTemplate) {
+    const event = await readJson(join(runDir, "event.json")).catch(() => null);
+    const specialTemplate = await selectSpecialTemplate(event);
+    if (!specialTemplate) return null;
+    manifest.specialTemplate = specialTemplate;
+  }
+  if (!auth || manifest.specialTemplate.status === "resolved") return manifest.specialTemplate;
+
+  const sourceUrl = manifest.specialTemplate.pageTemplate?.sourceUrl;
+  if (!sourceUrl) {
+    manifest.specialTemplate = {
+      ...manifest.specialTemplate,
+      status: "needs_resolution",
+      lastError: "Special template has no pageTemplate.sourceUrl."
+    };
+    await writeJson(manifestPath, manifest);
+    return manifest.specialTemplate;
+  }
+
+  try {
+    const pageTemplate = await resolveGlueUpPageTemplateReference({
+      reference: {
+        sourceUrl,
+        sourceEventId: extractGlueUpEventId(sourceUrl)
+      },
+      cookie: auth.cookie
+    });
+    manifest.specialTemplate = {
+      ...manifest.specialTemplate,
+      status: "resolved",
+      resolvedAt: new Date().toISOString(),
+      resolved: {
+        ...(manifest.specialTemplate.resolved || {}),
+        pageTemplate
+      },
+      lastError: null
+    };
+    console.log(`Resolved special template "${manifest.specialTemplate.key}" from ${sourceUrl}`);
+  } catch (error) {
+    manifest.specialTemplate = {
+      ...manifest.specialTemplate,
+      status: "needs_resolution",
+      checkedAt: new Date().toISOString(),
+      lastError: error.message
+    };
+    console.log(`Could not resolve special template "${manifest.specialTemplate.key}": ${error.message}`);
+  }
+  await writeJson(manifestPath, manifest);
+  return manifest.specialTemplate;
+}
+
+function eventSearchValues(event) {
+  return [
+    event?.eventType,
+    event?.eventName,
+    event?.description,
+    event?.registrationUrl,
+    ...Object.entries(event?.rawFields || {}).flatMap(([key, value]) => [key, value]),
+    ...(event?.sessions || []).flatMap((session) => [
+      session.title,
+      session.description,
+      ...(session.speakers || [])
+    ])
+  ].filter(Boolean);
+}
+
+function normalizeTemplateText(values) {
+  return values.join(" ").toLowerCase().replace(/[^a-z0-9+]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function titleCase(value) {
+  return String(value || "").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function collectTicketingFromEvent(event) {
@@ -802,6 +921,7 @@ async function ensureWorkflow(args) {
 
   await ensureCampaigns({ ...args, run: ensured.runDir }, { auth });
   await resolveDeferredGlueUpReferences({ runDir: ensured.runDir, auth });
+  await resolveSpecialTemplate({ runDir: ensured.runDir, auth });
   await ensureManifestTicketing(ensured.runDir);
   const updated = await readJson(join(ensured.runDir, "manifest.json"));
   console.log(`\nGlue Up shells are ensured for ${ensured.runDir}.`);
@@ -1364,6 +1484,11 @@ async function populatePage(args, options = {}) {
 }
 
 function getResolvedGlueUpPageTemplate(manifest) {
+  const specialPageTemplate = manifest?.specialTemplate?.status === "resolved"
+    ? manifest.specialTemplate?.resolved?.pageTemplate
+    : null;
+  if (specialPageTemplate) return specialPageTemplate;
+
   const references = Array.isArray(manifest?.deferredGlueUpReferences) ? manifest.deferredGlueUpReferences : [];
   return references.find((reference) => reference.type === "pageTemplate" && reference.status === "resolved" && reference.resolved?.pageTemplate)
     ?.resolved?.pageTemplate || null;
