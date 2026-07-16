@@ -85,10 +85,17 @@ export function eventInfoFromSlug(slug) {
 
 // Pull the month out of a Drive event folder name like "06 - June 2026 - NHH".
 // The leading number is the event index, not the month, so the month comes from
-// the spelled-out month word.
+// the spelled-out month word — full or abbreviated ("Aug", "Sept").
 export function monthInfoFromFolderName(name, year) {
   const lower = name.toLowerCase();
-  const monthIndex = MONTH_NAMES.findIndex((m) => lower.includes(m.toLowerCase()));
+  const tokens = lower.split(/[^a-z]+/).filter(Boolean);
+  const monthIndex = MONTH_NAMES.findIndex((m) => {
+    const month = m.toLowerCase();
+    return (
+      lower.includes(month) ||
+      tokens.some((token) => token.length >= 3 && month.startsWith(token))
+    );
+  });
   if (monthIndex === -1) {
     throw new Error(`Could not find a month name in event folder "${name}".`);
   }

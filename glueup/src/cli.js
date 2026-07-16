@@ -127,10 +127,11 @@ async function prepare(args) {
     index: eventInfo.index
   });
   const monthInfo = monthInfoFromFolderName(eventFolder.name, eventInfo.year);
-  const expectedDocName = `${monthInfo.monthName} ${monthInfo.year} - Event Summary Sheet`;
-  const docFile = await drive.findChildFile(eventFolder.id, expectedDocName);
+  const docFile = await drive.findSummaryDoc(eventFolder.id, monthInfo);
   if (!docFile) {
-    throw new Error(`Could not find "${expectedDocName}" in ${eventFolder.name}.`);
+    throw new Error(
+      `Could not find an event summary sheet for ${monthInfo.monthName} ${monthInfo.year} in ${eventFolder.name}.`
+    );
   }
 
   const [doc, photos] = await Promise.all([
