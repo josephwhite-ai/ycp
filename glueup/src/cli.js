@@ -147,16 +147,30 @@ async function prepare(args) {
     console.log(`Speaker photo gathering failed (non-fatal): ${error.message}`);
     return [];
   });
-  const bannerCandidates = await gatherBannerCandidates(drive).catch((error) => {
-    console.log(`Banner candidate scan failed (non-fatal): ${error.message}`);
-    return [];
-  });
+  const specialTemplate = await selectSpecialTemplate(event);
+  if (specialTemplate) {
+    console.log(`Special template matched: "${specialTemplate.key}" (keyword "${specialTemplate.matchedKeyword}")`);
+  }
+  // A special template's banner is downloaded locally during ensure (Glue Up is
+  // behind Cloudflare, so CI shouldn't fetch it) — skip photo-library ranking.
+  const useSpecialBanner = Boolean(specialTemplate?.banner?.sourceUrl);
+  if (useSpecialBanner) {
+    console.log(`Special template "${specialTemplate.key}" supplies the banner; skipping photo-library banner selection.`);
+  }
+  const bannerCandidates = useSpecialBanner
+    ? []
+    : await gatherBannerCandidates(drive).catch((error) => {
+        console.log(`Banner candidate scan failed (non-fatal): ${error.message}`);
+        return [];
+      });
   console.log(`Banner candidates found: ${bannerCandidates.length}`);
   for (const c of bannerCandidates) console.log(`  ${c.year}/${c.folder}/${c.name} [${c.mimeType}] (${(c.modifiedTime || "").slice(0, 10)})`);
-  const banner = await prepareBannerImage({ drive, candidates: bannerCandidates, event, config, runDir }).catch((error) => {
-    console.log(`Banner selection failed (non-fatal): ${error.message}`);
-    return null;
-  });
+  const banner = useSpecialBanner
+    ? null
+    : await prepareBannerImage({ drive, candidates: bannerCandidates, event, config, runDir }).catch((error) => {
+        console.log(`Banner selection failed (non-fatal): ${error.message}`);
+        return null;
+      });
   const artifacts = await generateArtifacts({ event, photos, config });
   // Render the final published strings here so the artifact carries exactly what
   // populate will transfer, and the proofreading pass reviews the real output.
@@ -173,9 +187,9 @@ async function prepare(args) {
     rendered: renderedContent,
     config
   });
-  const validation = validateEventRun({ event, artifacts, config, speakerPhotos, contentReview });
+  const templateSelection = applySpecialTemplateToSelection(selectEventTemplate(event), specialTemplate);
+  const validation = validateEventRun({ event, artifacts, config, speakerPhotos, contentReview, templateSelection });
   const ticketing = collectTicketingFromEvent(event);
-  const specialTemplate = await selectSpecialTemplate(event);
 
   const manifest = {
     preparedAt: new Date().toISOString(),
@@ -199,7 +213,7 @@ async function prepare(args) {
   await writeJson(join(runDir, "speaker-photos.json"), speakerPhotos);
   await writeJson(join(runDir, "content-review.json"), contentReview);
   await writeJson(join(runDir, "content-render.json"), renderedContent);
-  await writeJson(join(runDir, "template-selection.json"), selectEventTemplate(event));
+  await writeJson(join(runDir, "template-selection.json"), templateSelection);
   await writeJson(join(runDir, "photo-recommendations.json"), artifacts.photoRecommendations || []);
   await writeFile(join(runDir, "webpage.md"), artifacts.webpage || "", "utf8");
   await writeFile(join(runDir, "email-week-before.md"), artifacts.emails?.weekBefore || "", "utf8");
@@ -468,6 +482,17 @@ function cloneGlueUpPageBlockForTarget(value) {
   return clone;
 }
 
+// Static special-template blocks may reference per-event rendered content via
+// {{placeholders}} (currently {{scheduleHtml}}), so the template pins the layout
+// while each event still gets its own schedule and CTA. A block whose value
+// becomes empty after substitution is dropped, mirroring the default page build.
+function fillPageBlockPlaceholders(block, { scheduleHtml }) {
+  if (typeof block?.value !== "string" || !block.value.includes("{{")) return block;
+  const value = block.value.replaceAll("{{scheduleHtml}}", scheduleHtml || "");
+  if (!value.trim()) return null;
+  return { ...block, value };
+}
+
 async function selectSpecialTemplate(event) {
   const templates = await loadSpecialTemplates();
   if (!templates.length) return null;
@@ -477,14 +502,42 @@ async function selectSpecialTemplate(event) {
   );
   if (!matched) return null;
   const matchedKeyword = matched.keywords.find((keyword) => haystack.includes(normalizeTemplateText([keyword])));
+  const staticPageTemplate = buildStaticSpecialPageTemplate(matched);
   return {
     key: matched.key,
     label: matched.label,
-    status: "pending",
+    status: staticPageTemplate ? "resolved" : "pending",
+    ...(staticPageTemplate ? { resolvedAt: new Date().toISOString() } : {}),
     matchedKeyword,
     sourcePath: matched.sourcePath,
-    pageTemplate: matched.pageTemplate || null,
-    note: "Local special template selected from templates/<keyword>; resolved locally during ensure."
+    glueUp: matched.glueUp || null,
+    banner: matched.banner || null,
+    pageTemplate: matched.pageTemplate
+      ? { sourceUrl: matched.pageTemplate.sourceUrl || null, static: Boolean(staticPageTemplate) }
+      : null,
+    ...(staticPageTemplate ? { resolved: { pageTemplate: staticPageTemplate } } : {}),
+    note: staticPageTemplate
+      ? "Local special template with static page blocks; no live Glue Up page to resolve."
+      : "Local special template selected from templates/<keyword>; resolved locally during ensure."
+  };
+}
+
+// A special template can carry its page blocks inline (pageTemplate.content),
+// which makes it resolvable without reading any live Glue Up event. This is the
+// only option when the model event predates the org's current site templates
+// (e.g. baseball event 145378, whose admin design page has no block state).
+function buildStaticSpecialPageTemplate(template) {
+  const content = template?.pageTemplate?.content;
+  if (!Array.isArray(content) || !content.length) return null;
+  return {
+    source: {
+      origin: "local-template",
+      sourcePath: template.sourcePath,
+      sourceUrl: template.pageTemplate.sourceUrl || null,
+      pageID: template.pageTemplate.pageID || "home",
+      title: template.pageTemplate.title || "Event Details"
+    },
+    content: content.map((block) => cloneGlueUpPageBlockForTarget(block))
   };
 }
 
@@ -500,6 +553,8 @@ async function loadSpecialTemplates() {
       key: config.key || key,
       label: config.label || titleCase(key.replace(/[-_]+/g, " ")),
       keywords: [...new Set([key, ...(config.keywords || [])])],
+      glueUp: config.glueUp || null,
+      banner: config.banner || null,
       pageTemplate: config.pageTemplate || null,
       sourcePath
     });
@@ -515,50 +570,148 @@ async function resolveSpecialTemplate({ runDir, auth }) {
     const specialTemplate = await selectSpecialTemplate(event);
     if (!specialTemplate) return null;
     manifest.specialTemplate = specialTemplate;
-  }
-  if (!auth || manifest.specialTemplate.status === "resolved") return manifest.specialTemplate;
-
-  const sourceUrl = manifest.specialTemplate.pageTemplate?.sourceUrl;
-  if (!sourceUrl) {
-    manifest.specialTemplate = {
-      ...manifest.specialTemplate,
-      status: "needs_resolution",
-      lastError: "Special template has no pageTemplate.sourceUrl."
-    };
-    await writeJson(manifestPath, manifest);
-    return manifest.specialTemplate;
+  } else if (manifest.specialTemplate.status !== "resolved") {
+    // Refresh an unresolved entry from the current template definition, so fixes
+    // to templates/<key>/template.json (e.g. adding static blocks) reach runs
+    // that were prepared while the template was still unresolvable.
+    const event = await readJson(join(runDir, "event.json")).catch(() => null);
+    const refreshed = await selectSpecialTemplate(event);
+    if (refreshed?.key === manifest.specialTemplate.key) manifest.specialTemplate = refreshed;
   }
 
-  try {
-    const pageTemplate = await resolveGlueUpPageTemplateReference({
-      reference: {
-        sourceUrl,
-        sourceEventId: extractGlueUpEventId(sourceUrl)
-      },
-      cookie: auth.cookie
+  await ensureSpecialTemplateSelection(runDir, manifest.specialTemplate);
+
+  if (manifest.specialTemplate.banner?.sourceUrl) {
+    manifest.specialTemplate = await ensureSpecialTemplateBanner({
+      runDir,
+      special: manifest.specialTemplate,
+      auth
     });
-    manifest.specialTemplate = {
-      ...manifest.specialTemplate,
-      status: "resolved",
-      resolvedAt: new Date().toISOString(),
-      resolved: {
-        ...(manifest.specialTemplate.resolved || {}),
-        pageTemplate
-      },
-      lastError: null
-    };
-    console.log(`Resolved special template "${manifest.specialTemplate.key}" from ${sourceUrl}`);
-  } catch (error) {
-    manifest.specialTemplate = {
-      ...manifest.specialTemplate,
-      status: "needs_resolution",
-      checkedAt: new Date().toISOString(),
-      lastError: error.message
-    };
-    console.log(`Could not resolve special template "${manifest.specialTemplate.key}": ${error.message}`);
+  }
+
+  if (auth && manifest.specialTemplate.status !== "resolved") {
+    const sourceUrl = manifest.specialTemplate.pageTemplate?.sourceUrl;
+    if (!sourceUrl) {
+      manifest.specialTemplate = {
+        ...manifest.specialTemplate,
+        status: "needs_resolution",
+        lastError: "Special template has no static pageTemplate.content and no pageTemplate.sourceUrl."
+      };
+    } else {
+      try {
+        const pageTemplate = await resolveGlueUpPageTemplateReference({
+          reference: {
+            sourceUrl,
+            sourceEventId: extractGlueUpEventId(sourceUrl)
+          },
+          cookie: auth.cookie
+        });
+        manifest.specialTemplate = {
+          ...manifest.specialTemplate,
+          status: "resolved",
+          resolvedAt: new Date().toISOString(),
+          resolved: {
+            ...(manifest.specialTemplate.resolved || {}),
+            pageTemplate
+          },
+          lastError: null
+        };
+        console.log(`Resolved special template "${manifest.specialTemplate.key}" from ${sourceUrl}`);
+      } catch (error) {
+        manifest.specialTemplate = {
+          ...manifest.specialTemplate,
+          status: "needs_resolution",
+          checkedAt: new Date().toISOString(),
+          lastError: error.message
+        };
+        console.log(`Could not resolve special template "${manifest.specialTemplate.key}": ${error.message}`);
+      }
+    }
   }
   await writeJson(manifestPath, manifest);
   return manifest.specialTemplate;
+}
+
+// A special template can pin the Glue Up blueprint (glueUp.eventType/blueprintCode).
+// Event types like "Baseball Game" match nothing in the approved taxonomy, so
+// without this override template-selection.json has no blueprint and ensure fails.
+function applySpecialTemplateToSelection(selection, special) {
+  if (!special?.glueUp?.eventType || !special?.glueUp?.blueprintCode) return selection;
+  const base = selection?.selected || null;
+  return {
+    ...(selection || {}),
+    selected: {
+      key: base?.key || special.key,
+      label: base?.label || special.label,
+      variantKey: base?.variantKey || "special",
+      variantLabel: base?.variantLabel || special.label,
+      glueUp: special.glueUp,
+      requiredFields: base?.requiredFields || ["eventName", "eventDate", "venue"],
+      specialTemplate: special.key
+    },
+    confidence: "high",
+    notes: [
+      ...((selection?.notes || []).filter((note) => !/blueprint codes have not been configured/i.test(note))),
+      `Glue Up blueprint ${special.glueUp.blueprintCode} pinned by special template "${special.key}".`
+    ]
+  };
+}
+
+// Backfills the blueprint pin into template-selection.json for artifacts
+// prepared before the special template (or before it carried a glueUp block).
+async function ensureSpecialTemplateSelection(runDir, special) {
+  if (!special?.glueUp?.blueprintCode) return;
+  const selectionPath = join(runDir, "template-selection.json");
+  const selection = await readJson(selectionPath).catch(() => null);
+  if (!selection) return;
+  if (selection.selected?.glueUp?.blueprintCode === special.glueUp.blueprintCode) return;
+  await writeJson(selectionPath, applySpecialTemplateToSelection(selection, special));
+  console.log(`Pinned Glue Up blueprint ${special.glueUp.blueprintCode} from special template "${special.key}".`);
+}
+
+// Downloads the special template's banner into the run dir so populate-banner
+// picks it up like any prepared banner. Runs locally during ensure (the CI
+// prepare half skips it: Glue Up sits behind Cloudflare). A banner the operator
+// dropped in manually (no banner.json) is left alone; a banner selected from the
+// photo library is replaced, since the special template's banner is the approved
+// look for these events. Non-fatal on failure — populate-banner just skips.
+async function ensureSpecialTemplateBanner({ runDir, special, auth }) {
+  const sourceUrl = special.banner.sourceUrl;
+  const existingPath = resolveBannerPath(runDir);
+  const bannerMeta = await readJson(join(runDir, "banner.json")).catch(() => null);
+  if (existingPath && bannerMeta?.sourceUrl === sourceUrl) return special;
+  if (existingPath && !bannerMeta) {
+    console.log(`Keeping manually provided banner ${existingPath}; special template banner not downloaded.`);
+    return special;
+  }
+
+  try {
+    const response = await fetch(sourceUrl, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        ...(auth?.cookie ? { cookie: auth.cookie } : {})
+      }
+    });
+    if (!response.ok) throw new Error(`banner download failed (${response.status})`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const ext = sniffImageExt(bytes);
+    if (!["jpg", "png"].includes(ext)) throw new Error(`banner download returned unexpected image type "${ext}"`);
+    if (existingPath) await rm(existingPath, { force: true });
+    const fileName = `banner.${ext}`;
+    const downloadedAt = new Date().toISOString();
+    await writeFile(join(runDir, fileName), bytes);
+    await writeJson(join(runDir, "banner.json"), {
+      source: `special-template:${special.key}`,
+      sourceUrl,
+      note: special.banner.note || null,
+      downloadedAt
+    });
+    console.log(`Downloaded special template banner to ${join(runDir, fileName)} (${bytes.length} bytes).`);
+    return { ...special, banner: { ...special.banner, file: fileName, downloadedAt } };
+  } catch (error) {
+    console.log(`Special template banner download failed (non-fatal): ${error.message}`);
+    return { ...special, banner: { ...special.banner, lastError: error.message } };
+  }
 }
 
 function eventSearchValues(event) {
@@ -901,7 +1054,8 @@ async function validate(args) {
     },
     config,
     speakerPhotos,
-    contentReview
+    contentReview,
+    templateSelection: applySpecialTemplateToSelection(selectEventTemplate(event), await selectSpecialTemplate(event))
   });
 
   await writeFile(join(runDir, "validation-report.md"), validationReport(validation), "utf8");
@@ -916,12 +1070,15 @@ async function ensureWorkflow(args) {
   const auth = args.dryRun ? null : await ensureGlueUpAuth({ headless: !args.headed });
   if (auth) printAuthNote(auth);
 
+  // Resolve the special template before the draft exists: it can pin the Glue Up
+  // blueprint that ensureDraft reads from template-selection.json, and it stages
+  // the template banner into the run dir.
+  await resolveSpecialTemplate({ runDir, auth });
   const ensured = await ensureDraft({ ...args, run: runDir }, { returnManifest: true, auth });
   if (args.dryRun) return;
 
   await ensureCampaigns({ ...args, run: ensured.runDir }, { auth });
   await resolveDeferredGlueUpReferences({ runDir: ensured.runDir, auth });
-  await resolveSpecialTemplate({ runDir: ensured.runDir, auth });
   await ensureManifestTicketing(ensured.runDir);
   const updated = await readJson(join(ensured.runDir, "manifest.json"));
   console.log(`\nGlue Up shells are ensured for ${ensured.runDir}.`);
@@ -1458,6 +1615,17 @@ async function populatePage(args, options = {}) {
   const event = options.event || normalizeEventFields(await readJson(join(runDir, "event.json")));
   const eventId = options.eventId || manifest?.glueUp?.eventId;
   if (!eventId) throw new Error(`${join(runDir, "manifest.json")} is missing glueUp.eventId. Run ensure first.`);
+
+  // A matched-but-unresolved special template means the page would silently go
+  // out with the generic blueprint blocks — fail loudly instead of publishing
+  // something that doesn't follow the approved special layout.
+  if (manifest?.specialTemplate && manifest.specialTemplate.status !== "resolved") {
+    throw new Error(
+      `Special template "${manifest.specialTemplate.key}" matched this event but is not resolved` +
+        `${manifest.specialTemplate.lastError ? ` (${manifest.specialTemplate.lastError})` : ""}. ` +
+        `Run npm run ensure, or fix ${manifest.specialTemplate.sourcePath || "templates/<key>/template.json"}.`
+    );
+  }
 
   const rendered = options.rendered || (await loadRenderedContent(runDir, event));
   const sourcePageTemplate = getResolvedGlueUpPageTemplate(manifest);
@@ -2286,7 +2454,10 @@ async function populateEventPageContentViaDesignPage({
   const currentPath = `/events/${eventId}/publishing/website/design/`;
   const pageCsrf = await fetchGlueUpPageCsrfToken({ path: currentPath, cookie, fallback: csrfToken });
   const content = sourcePageTemplate?.content?.length
-    ? sourcePageTemplate.content.map((block) => cloneGlueUpPageBlockForTarget(block))
+    ? sourcePageTemplate.content
+        .map((block) => cloneGlueUpPageBlockForTarget(block))
+        .map((block) => fillPageBlockPlaceholders(block, { scheduleHtml }))
+        .filter(Boolean)
     : [
         { type: "summary", id: "" },
         ...(scheduleHtml ? [{ type: "html", id: "", value: scheduleHtml }] : []),
@@ -2311,7 +2482,7 @@ async function populateEventPageContentViaDesignPage({
   const blocks = payload?.data?.value?.content?.length || 0;
   console.log(
     sourcePageTemplate
-      ? `Populated event page content from Glue Up template reference (${blocks} blocks; source ${sourcePageTemplate.source.sourceUrl})`
+      ? `Populated event page content from ${sourcePageTemplate.source?.origin === "local-template" ? "local special template" : "Glue Up template reference"} (${blocks} blocks; source ${sourcePageTemplate.source?.sourceUrl || sourcePageTemplate.source?.sourcePath || "local"})`
       : `Populated event page content (${blocks} blocks; schedule ${scheduleHtml ? "set" : "skipped"})`
   );
 
