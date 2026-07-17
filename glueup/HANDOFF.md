@@ -70,6 +70,12 @@ Current baseline:
   - Can be run alone with `npm run populate-page -- --event <index>`.
 - [x] Speaker details in invitation campaigns
   - `buildDefaultCampaignSetupPayloads` inserts a "Featured Speakers" `html` block (name — position, company, built by `buildCampaignSpeakersHtml`) after the `summary` block in the `ContentFormSubmit` email body. Applied to both the week-before and day-before campaigns.
+- [x] Special event templates (`templates/<keyword>/template.json`)
+  - Matched by keyword against the summary sheet during `prepare` (or backfilled/refreshed during `ensure` while unresolved). Can carry static page blocks (`pageTemplate.content`, `{{scheduleHtml}}` substituted per event at populate time), a pinned blueprint (`glueUp.eventType`/`blueprintCode`, applied to `template-selection.json` and validation so event types outside the taxonomy still select a blueprint), and a banner (`banner.sourceUrl`, downloaded into the run dir during local `ensure`; manual banner drops without `banner.json` are left alone).
+  - **Why static blocks:** the Yard Goats model event 145378 predates the org's v2 site templates — its admin design page 302s to the template chooser, so it can never be resolved live (`resolveGlueUpPageTemplateReference` finds no content). Live resolution via `pageTemplate.sourceUrl` still works for v2-era source events.
+  - `populate-page` refuses to run while a matched special template is unresolved (prevents silently publishing generic blocks).
+  - Verified live on draft 188278 (evt-2026-008): static blocks + substituted schedule landed via `populate-page`; blueprint pin and Dunkin' Park banner download verified via `ensure`.
+  - **Open item:** the banner *upload* (`populate-banner`) hit a Glue Up-side `/upload/images` outage on 2026-07-17 — every variant returns `{code:504, "Sorry, an error occurred"}` including the real design-customizer UI driven by browser (and the previously-working speaker upload path with a fresh page token). Nothing wrong with the payload; re-run `npm run populate-banner -- --run runs/evt-2026-008` once Glue Up recovers.
 
 ## Architecture: prepare renders the final content, populate transfers it
 
