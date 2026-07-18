@@ -7,7 +7,33 @@
     "dunkin park",
     "somerset patriots"
   ],
+  "glueUp": {
+    "eventType": "Offline",
+    "blueprintCode": "90663"
+  },
+  "banner": {
+    "sourceUrl": "https://ycp.glueup.com/resources/public/images/orig/1da2a73a-f1cb-47db-9978-218aa00b6f8d.jpg",
+    "note": "Night aerial of Dunkin' Park and the Hartford skyline, reused from the 2025 Yard Goats event (145378)."
+  },
+  "venue": {
+    "geo": { "latitude": 41.771248, "longitude": -72.674561, "zoom": 15 },
+    "note": "Dunkin' Park coordinates from event 145378's venue widget; Glue Up's map search cannot resolve the street address."
+  },
   "pageTemplate": {
-    "sourceUrl": "https://ycp.glueup.com/event/hartford-yard-goats-vs-somerset-patriots-145378/"
+    "sourceUrl": "https://ycp.glueup.com/event/hartford-yard-goats-vs-somerset-patriots-145378/",
+    "pageID": "home",
+    "title": "Event Details",
+    "note": "Event 145378 predates the org's v2 site templates, so its admin design page has no block state to clone; these static blocks mirror its public layout instead.",
+    "content": [
+      { "id": "", "type": "summary" },
+      { "id": "", "type": "html", "value": "{{scheduleHtml}}" },
+      { "id": "", "type": "speakersWidget" },
+      { "id": "", "type": "agendaWidget" },
+      { "id": "", "type": "venueWidget" },
+      { "id": "", "type": "sponsorsWidget" },
+      { "id": "", "type": "exhibitorsWidget" },
+      { "id": "", "type": "ticketsWidget" },
+      { "id": "", "type": "directoryWidget" }
+    ]
   }
 }
