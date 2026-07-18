@@ -2,10 +2,10 @@ import { selectEventTemplate } from "../templates/eventTypes.js";
 
 const REQUIRED_EVENT_FIELDS = ["eventName", "eventDate"];
 
-export function validateEventRun({ event, artifacts, config, speakerPhotos = [], contentReview = null }) {
+export function validateEventRun({ event, artifacts, config, speakerPhotos = [], contentReview = null, templateSelection = null }) {
   const errors = [];
   const warnings = [];
-  const templateSelection = selectEventTemplate(event);
+  templateSelection = templateSelection || selectEventTemplate(event);
   const speakerImagesForReview = speakerPhotos.filter(
     (photo) =>
       photo.sourceUrl ||

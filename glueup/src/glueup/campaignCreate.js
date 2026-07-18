@@ -110,7 +110,9 @@ export async function addCampaign({
 }) {
   if (!cookie) throw new Error("Missing GLUEUP_COOKIE.");
 
-  const token = csrfToken || (await fetchCampaignCsrfToken({ cookie }));
+  // The CRM campaign endpoints validate the campaigns-page token, not the
+  // TOKEN-cookie CSRF an env override may carry — prefer a fresh page token.
+  const token = (await fetchCampaignCsrfToken({ cookie }).catch(() => null)) || csrfToken;
   const request = buildAddCampaignRequest({
     eventId,
     title,
@@ -160,7 +162,9 @@ async function postCampaignAction({
 }) {
   if (!cookie) throw new Error("Missing GLUEUP_COOKIE.");
   if (!action) throw new Error("Missing Glue Up campaign action.");
-  const token = csrfToken || (await fetchCampaignCsrfToken({ cookie }));
+  // The CRM campaign endpoints validate the campaigns-page token, not the
+  // TOKEN-cookie CSRF an env override may carry — prefer a fresh page token.
+  const token = (await fetchCampaignCsrfToken({ cookie }).catch(() => null)) || csrfToken;
   const currentPath = campaignPath({ eventId, campaignId });
   const body = new URLSearchParams({
     action,
@@ -359,7 +363,9 @@ export async function applyCampaignSetup({
   if (!Array.isArray(payloads) || !payloads.length) {
     throw new Error("Missing campaign setup payloads.");
   }
-  const token = csrfToken || (await fetchCampaignCsrfToken({ cookie }));
+  // The CRM campaign endpoints validate the campaigns-page token, not the
+  // TOKEN-cookie CSRF an env override may carry — prefer a fresh page token.
+  const token = (await fetchCampaignCsrfToken({ cookie }).catch(() => null)) || csrfToken;
   const responses = [];
   for (const payload of payloads) {
     responses.push(
