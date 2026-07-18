@@ -512,6 +512,7 @@ async function selectSpecialTemplate(event) {
     sourcePath: matched.sourcePath,
     glueUp: matched.glueUp || null,
     banner: matched.banner || null,
+    venue: matched.venue || null,
     pageTemplate: matched.pageTemplate
       ? { sourceUrl: matched.pageTemplate.sourceUrl || null, static: Boolean(staticPageTemplate) }
       : null,
@@ -555,6 +556,7 @@ async function loadSpecialTemplates() {
       keywords: [...new Set([key, ...(config.keywords || [])])],
       glueUp: config.glueUp || null,
       banner: config.banner || null,
+      venue: config.venue || null,
       pageTemplate: config.pageTemplate || null,
       sourcePath
     });
@@ -577,6 +579,21 @@ async function resolveSpecialTemplate({ runDir, auth }) {
     const event = await readJson(join(runDir, "event.json")).catch(() => null);
     const refreshed = await selectSpecialTemplate(event);
     if (refreshed?.key === manifest.specialTemplate.key) manifest.specialTemplate = refreshed;
+  } else {
+    // Even when resolved, sync the definition-level fields (blueprint, banner,
+    // venue) from the current template.json so template edits reach the run.
+    const definition = (await loadSpecialTemplates()).find((t) => t.key === manifest.specialTemplate.key);
+    if (definition) {
+      const sameBanner = manifest.specialTemplate.banner?.sourceUrl === definition.banner?.sourceUrl;
+      manifest.specialTemplate = {
+        ...manifest.specialTemplate,
+        glueUp: definition.glueUp || null,
+        venue: definition.venue || null,
+        banner: definition.banner
+          ? { ...definition.banner, ...(sameBanner ? manifest.specialTemplate.banner : {}) }
+          : null
+      };
+    }
   }
 
   await ensureSpecialTemplateSelection(runDir, manifest.specialTemplate);
@@ -1473,6 +1490,7 @@ async function populateVenue(args, options = {}) {
   const venue = await populateEventVenueViaAjax({
     eventId,
     event,
+    templateGeo: manifest?.specialTemplate?.venue?.geo || null,
     cookie: auth.cookie,
     csrfToken: auth.csrfToken,
     orgId: auth.orgId
@@ -2012,7 +2030,7 @@ function cleanSingleLine(value) {
     .find(Boolean) || "";
 }
 
-async function populateEventVenueViaAjax({ eventId, event, cookie, csrfToken, orgId }) {
+async function populateEventVenueViaAjax({ eventId, event, templateGeo = null, cookie, csrfToken, orgId }) {
   const venue = normalizeEventVenue(event);
   if (!venue.full) {
     console.log("Skipping venue populate: event.venue is blank.");
@@ -2025,9 +2043,10 @@ async function populateEventVenueViaAjax({ eventId, event, cookie, csrfToken, or
     fallback: csrfToken
   });
 
-  const geo = await searchVenueGeo({
+  const geo = await resolveVenueGeo({
     eventId,
-    search: venue.search,
+    venue,
+    templateGeo,
     cookie,
     csrfToken: pageCsrfToken,
     orgId
@@ -2114,8 +2133,13 @@ async function inspectGlueUpTicketInventory({ eventId, headless }) {
         };
       }).catch(() => null);
       if (price?.id && price?.ticketID) prices.push(price);
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(250);
+      // The edit-price modal doesn't dismiss on Escape and keeps intercepting
+      // clicks on the rows behind it. Its "Close" anchor is invisible — the
+      // visible Cancel button is the reliable dismiss control.
+      await page.locator("#modalHolder a.cancel-button:visible").first().click({ timeout: 3000 }).catch(() =>
+        page.locator('#modalHolder [data-event="StandardForm::hide"]').first().click({ force: true, timeout: 2000 }).catch(() => {})
+      );
+      await page.waitForTimeout(400);
     }
     return { tickets, prices };
   } finally {
@@ -2222,11 +2246,13 @@ async function updateGlueUpTicketPrice({ eventId, ticket, price, amount, availab
     availableFor: { code: availableFor },
     value: free ? "" : String(amount),
     currency: { code: "USD" },
-    paymentWay: { code: free ? "Free" : "Standard" },
+    // Glue Up's price-type codes: "Online" (Standard price), "Atdoor" (Door
+    // price), "Free" (Complimentary). There is no "Standard" code.
+    paymentWay: { code: free ? "Free" : "Online" },
     currentData: {
       isExpired: false,
       title: availableFor === "MembersOnly" ? "price_title_member_online" : "price_title_public_online",
-      paymentWay: price.paymentWay || (free ? "Free" : "Standard"),
+      paymentWay: price.paymentWay || (free ? "Free" : "Online"),
       isMemberOnly: availableFor === "MembersOnly",
       isSelected: false,
       isAllChaptersSelected: false,
@@ -2703,13 +2729,48 @@ async function searchVenueGeo({ eventId, search, cookie, csrfToken, orgId }) {
   });
   const value = response?.data?.value;
   if (!value || typeof value.latitude !== "number" || typeof value.longitude !== "number") {
-    throw new Error(`Glue Up map search did not return coordinates for venue search "${search}".`);
+    return null;
   }
   return {
     latitude: value.latitude,
     longitude: value.longitude,
     zoom: typeof value.zoom === "number" ? value.zoom : 14
   };
+}
+
+// Glue Up's map search only resolves coarse place names — venue names and street
+// addresses usually return null — so walk from most to least specific, preferring
+// a special template's exact coordinates over a city-level pin.
+async function resolveVenueGeo({ eventId, venue, templateGeo, cookie, csrfToken, orgId }) {
+  const queries = [...new Set([
+    venue.search,
+    [venue.address, venue.city].filter(Boolean).join(" "),
+    venue.city
+  ].filter(Boolean))];
+  for (const search of queries) {
+    if (templateGeo && search === venue.city) break;
+    const geo = await searchVenueGeo({ eventId, search, cookie, csrfToken, orgId });
+    if (geo) {
+      console.log(`Venue geo from map search "${search}".`);
+      return geo;
+    }
+  }
+  if (templateGeo && typeof templateGeo.latitude === "number" && typeof templateGeo.longitude === "number") {
+    console.log("Venue geo from special template coordinates.");
+    return {
+      latitude: templateGeo.latitude,
+      longitude: templateGeo.longitude,
+      zoom: typeof templateGeo.zoom === "number" ? templateGeo.zoom : 15
+    };
+  }
+  if (venue.city) {
+    const geo = await searchVenueGeo({ eventId, search: venue.city, cookie, csrfToken, orgId });
+    if (geo) {
+      console.log(`Venue geo from city-level map search "${venue.city}".`);
+      return geo;
+    }
+  }
+  throw new Error(`Glue Up map search did not return coordinates for venue "${venue.search}".`);
 }
 
 async function postGlueUpAjax({ path, currentPath, refererPath, action, data, cookie, csrfToken, orgId }) {
