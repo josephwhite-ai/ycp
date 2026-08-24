@@ -37,6 +37,7 @@ jobs:
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ../credentials/google-service-account.json
           BANNER_EXTRA_IDS: 1R5Wg2NZ_Ym5S1PO7PW9mIdelhiCXUL4h,1xoLlEvx3YH82Svm-PV-XF_QR_Q-7iznJ,1U0prLCPeJCu4R_fwRMy2VvTd1zkQyGs5,1brujsWA6-Z3f2i63gRFDdRIXpTbNc3Ju
+          BANNER_DOWNLOAD_IDS: 1brujsWA6-Z3f2i63gRFDdRIXpTbNc3Ju,1FEXGi9oK6BwjnMaQkVVg1biMF-_ZJ3dK,1a1PzqIjVpBYSTmoo7QyWOIDAf5YUzduZ
         run: node scripts/scan-banners.mjs banner-scan
 
       - name: Upload thumbnails

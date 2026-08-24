@@ -14,6 +14,10 @@ const EXTRA_IDS = (process.env.BANNER_EXTRA_IDS || "")
   .split(",")
   .map((id) => id.trim())
   .filter(Boolean);
+const DOWNLOAD_IDS = (process.env.BANNER_DOWNLOAD_IDS || "")
+  .split(",")
+  .map((id) => id.trim())
+  .filter(Boolean);
 
 function upsizeThumbnail(link) {
   if (!link) return link;
@@ -95,6 +99,19 @@ for (const id of EXTRA_IDS) {
     await saveThumb(img, "extra", img.name);
   } catch (error) {
     console.log(`extra id ${id} failed: ${error.message}`);
+  }
+}
+
+for (const id of DOWNLOAD_IDS) {
+  try {
+    const img = await drive.getFile(id, "id, name, mimeType, modifiedTime");
+    const bytes = await drive.downloadFile(id);
+    const ext = /\.([a-z0-9]+)$/i.exec(img.name)?.[1] || (img.mimeType?.includes("png") ? "png" : "bin");
+    const file = `original-${id}.${ext.toLowerCase()}`;
+    await writeFile(join(OUT, file), bytes);
+    console.log(`downloaded original ${img.name} -> ${file} (${bytes.length} bytes)`);
+  } catch (error) {
+    console.log(`download ${id} failed: ${error.message}`);
   }
 }
 
