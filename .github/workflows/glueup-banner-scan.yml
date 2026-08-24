@@ -1,0 +1,46 @@
+name: Glue Up Banner Scan
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Write Google credentials
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GOOGLE_CREDENTIALS_JSON" ]; then
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON secret is missing."
+            exit 1
+          fi
+          mkdir -p credentials
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials/google-service-account.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: glueup
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Scan photo library
+        working-directory: glueup
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ../credentials/google-service-account.json
+          BANNER_EXTRA_IDS: 1R5Wg2NZ_Ym5S1PO7PW9mIdelhiCXUL4h,1xoLlEvx3YH82Svm-PV-XF_QR_Q-7iznJ,1U0prLCPeJCu4R_fwRMy2VvTd1zkQyGs5,1brujsWA6-Z3f2i63gRFDdRIXpTbNc3Ju
+        run: node scripts/scan-banners.mjs banner-scan
+
+      - name: Upload thumbnails
+        uses: actions/upload-artifact@v4
+        with:
+          name: glueup-banner-scan
+          path: glueup/banner-scan/
