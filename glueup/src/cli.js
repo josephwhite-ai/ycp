@@ -1490,7 +1490,7 @@ async function populateVenue(args, options = {}) {
   const venue = await populateEventVenueViaAjax({
     eventId,
     event,
-    templateGeo: manifest?.specialTemplate?.venue?.geo || null,
+    templateGeo: manifest?.specialTemplate?.venue?.geo || manifest?.venueGeo || null,
     cookie: auth.cookie,
     csrfToken: auth.csrfToken,
     orgId: auth.orgId
@@ -2742,13 +2742,15 @@ async function searchVenueGeo({ eventId, search, cookie, csrfToken, orgId }) {
 // addresses usually return null — so walk from most to least specific, preferring
 // a special template's exact coordinates over a city-level pin.
 async function resolveVenueGeo({ eventId, venue, templateGeo, cookie, csrfToken, orgId }) {
+  const region = String(venue.full || "").match(/\b([A-Z]{2})\s+\d{5}(?:-\d{4})?\b/)?.[1] || "";
+  const cityQuery = [venue.city, region].filter(Boolean).join(", ");
   const queries = [...new Set([
     venue.search,
-    [venue.address, venue.city].filter(Boolean).join(" "),
-    venue.city
+    [venue.address, venue.city, region].filter(Boolean).join(" "),
+    cityQuery
   ].filter(Boolean))];
   for (const search of queries) {
-    if (templateGeo && search === venue.city) break;
+    if (templateGeo && (search === venue.city || search === cityQuery)) break;
     const geo = await searchVenueGeo({ eventId, search, cookie, csrfToken, orgId });
     if (geo) {
       console.log(`Venue geo from map search "${search}".`);
