@@ -82,7 +82,7 @@ export async function selectBannerCandidate({ drive, candidates, event, config }
     {
       text: JSON.stringify({
         task:
-          "Choose the single best photo to use as the hero banner for this event's public web page. Prefer a recent, high-quality, horizontally-composed photo that visually represents the event or community; avoid blurry shots, screenshots, flyers/graphics with heavy text, and images dominated by a single face. Return the chosen image id and a short reason, plus a ranking of all images. The images follow in order, each preceded by its id.",
+          "Choose the single best photo to use as the hero banner for this event's public web page. First discard portrait/vertical images and photos whose activity or venue conflicts with the event theme. The winner must be genuinely horizontal and visually relevant to this specific event; for a retreat, strongly prefer retreat, church, prayer, formation, or reflective community scenes over generic networking, dining, sports, or social photos. Also avoid blurry shots, screenshots, flyers/graphics with heavy text, and images dominated by a single face. Return the chosen image id and a short reason, plus a ranking of all images. The images follow in order, each preceded by its id.",
         event: eventContext(event),
         images: withThumb.map((item, index) => ({
           index,
