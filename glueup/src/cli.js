@@ -54,7 +54,8 @@ const GLUEUP_DEFAULT_SPEAKER_IMAGE_URI = "/images/defaults/default-profile.svg";
 // Shared "photo library" drive for event banners, organized as /<YEAR>/<event>/images.
 const PHOTO_LIBRARY_FOLDER_ID = process.env.GLUEUP_PHOTO_LIBRARY_FOLDER_ID || "0APt58RkpagPZUk9PVA";
 const BANNER_SKIP_FOLDER_RE = /pdf split|organizer|eventdata|receipt|^ads$/i;
-const BANNER_CANDIDATE_LIMIT = 8;
+const BANNER_CANDIDATE_LIMIT = 24;
+const BANNER_CANDIDATES_PER_FOLDER = 3;
 // Public event-page block layout (Website > Design "home" page). The summary and
 // schedule (html) blocks are written by populate; these widgets follow them.
 
@@ -827,7 +828,8 @@ async function ensureManifestTicketing(runDir) {
 // Only high-confidence metadata matches are accepted and surfaced in validation.
 // Collects recent banner candidate images from the shared photo-library drive,
 // walking most-recent year -> most-recent event subfolders (skipping utility
-// folders) and taking the newest images first, up to a small candidate cap.
+// folders). Sample each event instead of letting one photo-heavy event fill the
+// entire pool; this gives the vision ranker thematic alternatives.
 async function gatherBannerCandidates(drive, { limit = BANNER_CANDIDATE_LIMIT } = {}) {
   const driveId = PHOTO_LIBRARY_FOLDER_ID;
   const byRecent = (a, b) => String(b.modifiedTime || "").localeCompare(String(a.modifiedTime || ""));
@@ -850,7 +852,7 @@ async function gatherBannerCandidates(drive, { limit = BANNER_CANDIDATE_LIMIT } 
       }))
         .filter((f) => f.mimeType?.startsWith("image/"))
         .sort(byRecent);
-      for (const img of images) {
+      for (const img of images.slice(0, BANNER_CANDIDATES_PER_FOLDER)) {
         candidates.push({
           id: img.id,
           name: img.name,
