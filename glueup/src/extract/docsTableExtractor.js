@@ -281,9 +281,33 @@ function splitSpeakerEntries(value) {
 
 function normalizeDate(value) {
   if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toISOString().slice(0, 10);
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const numeric = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (numeric) {
+    return `${numeric[3]}-${numeric[1].padStart(2, "0")}-${numeric[2].padStart(2, "0")}`;
+  }
+
+  // "Sept 25th, 2026" / "September 25, 2026" — strip ordinals and accept Sept.
+  const stripped = raw.replace(/(\d+)(?:st|nd|rd|th)\b/gi, "$1").replace(/\bSept\b/gi, "Sep");
+  const named = stripped.match(
+    /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2}),?\s+(\d{4})\b/i
+  );
+  if (named) {
+    const months = {
+      jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+      jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12"
+    };
+    return `${named[3]}-${months[named[1].slice(0, 3).toLowerCase()]}-${named[2].padStart(2, "0")}`;
+  }
+
+  const date = new Date(stripped);
+  if (Number.isNaN(date.getTime())) return raw;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function deriveEventName(fields) {
