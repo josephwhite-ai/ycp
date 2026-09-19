@@ -13,7 +13,12 @@ import {
 } from "./config.js";
 import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
-import { PUBLIC_PAGE_WIDGETS, buildCampaignSpeakersHtml, renderPublishedContent } from "./generate/eventContent.js";
+import {
+  PUBLIC_PAGE_WIDGETS,
+  buildCampaignSpeakersHtml,
+  preservesBoldText,
+  renderPublishedContent
+} from "./generate/eventContent.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
@@ -2906,11 +2911,16 @@ async function populateEventSummaryViaSummaryPage({ eventId, summaryHtml, headle
       timeout: 60_000
     });
     await page.locator("div.ql-editor").first().waitFor({ state: "visible", timeout: 60_000 });
-    const saved = await page.locator("div.ql-editor").first().innerText().catch(() => "");
+    const savedEditor = page.locator("div.ql-editor").first();
+    const saved = await savedEditor.innerText().catch(() => "");
+    const savedHtml = await savedEditor.innerHTML().catch(() => "");
     const expected = stripHtml(html);
     const probe = expected.slice(0, 40);
     if (!saved.replace(/\s+/g, " ").includes(probe.replace(/\s+/g, " "))) {
       throw new Error("Glue Up summary save did not persist the event description.");
+    }
+    if (!preservesBoldText(html, savedHtml)) {
+      throw new Error("Glue Up summary save persisted the text but lost bold formatting.");
     }
     return true;
   } finally {
