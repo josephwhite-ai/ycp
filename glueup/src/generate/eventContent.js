@@ -160,6 +160,36 @@ export function centerSummaryHtml(html) {
   );
 }
 
+// Formatting verification for the Glue Up round trip. Quill may normalize
+// <strong> to <b> (or vice versa), so compare the text carried by either tag
+// instead of requiring byte-for-byte HTML equality.
+export function boldTextFragments(html) {
+  return Array.from(String(html || "").matchAll(/<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi))
+    .map((match) => htmlText(match[1]))
+    .filter(Boolean);
+}
+
+export function preservesBoldText(expectedHtml, savedHtml) {
+  const expected = boldTextFragments(expectedHtml);
+  if (!expected.length) return true;
+  const saved = boldTextFragments(savedHtml);
+  return expected.every((fragment) => saved.some((candidate) => candidate.includes(fragment)));
+}
+
+function htmlText(value) {
+  return String(value || "")
+    .replace(/<br\s*\/?\s*>/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // Converts a plain-text description (blank-line separated) into the paragraph
 // HTML the Glue Up Quill editor stores in the summary `about` field.
 export function descriptionToHtml(description) {
