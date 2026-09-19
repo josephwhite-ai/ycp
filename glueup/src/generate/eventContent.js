@@ -137,7 +137,27 @@ export function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) 
 // descriptionHtml existed.
 export function eventSummaryHtml(event) {
   const html = typeof event?.descriptionHtml === "string" ? event.descriptionHtml.trim() : "";
-  return html || descriptionToHtml(event?.description);
+  return centerSummaryHtml(html || descriptionToHtml(event?.description));
+}
+
+// Glue Up's Quill editor persists centered alignment as an inline text-align
+// style on each block. Apply it to every summary block instead of relying on a
+// wrapper, which Quill may discard while normalizing pasted HTML.
+export function centerSummaryHtml(html) {
+  return String(html || "").replace(
+    /<(p|div|h[1-6]|li)(\s[^>]*)?>/gi,
+    (tag, name, rawAttributes = "") => {
+      const stylePattern = /\sstyle=(['"])(.*?)\1/i;
+      const styleMatch = rawAttributes.match(stylePattern);
+      if (!styleMatch) return `<${name}${rawAttributes} style="text-align: center;">`;
+
+      const centeredStyle = /(?:^|;)\s*text-align\s*:/i.test(styleMatch[2])
+        ? styleMatch[2].replace(/(^|;)\s*text-align\s*:[^;]*/i, "$1 text-align: center")
+        : `${styleMatch[2].trim().replace(/;?$/, ";")} text-align: center;`;
+      const attributes = rawAttributes.replace(stylePattern, ` style=${styleMatch[1]}${centeredStyle}${styleMatch[1]}`);
+      return `<${name}${attributes}>`;
+    }
+  );
 }
 
 // Converts a plain-text description (blank-line separated) into the paragraph
