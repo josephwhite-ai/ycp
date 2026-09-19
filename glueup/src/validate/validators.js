@@ -1,4 +1,5 @@
 import { selectEventTemplate } from "../templates/eventTypes.js";
+import { validateSpecialRuleResults } from "./specialValidationRules.js";
 
 const REQUIRED_EVENT_FIELDS = ["eventName", "eventDate"];
 
@@ -50,6 +51,8 @@ export function validateEventRun({ event, artifacts, config, speakerPhotos = [],
   if (contentReview?.status === "skipped") {
     warnings.push(`Automated proofreading was skipped: ${contentReview.reason}.`);
   }
+
+  errors.push(...validateSpecialRuleResults(contentReview));
 
   for (const [name, content] of Object.entries({
     webpage: artifacts?.webpage || "",
@@ -184,6 +187,14 @@ export function validationReport(validation) {
     } else {
       for (const issue of validation.contentReview.issues) {
         lines.push(`- [${issue.confidence}] ${issue.field}: \`${issue.original}\` -> \`${issue.suggestion}\` — ${issue.reason}`);
+      }
+      lines.push("");
+    }
+    if (validation.contentReview.specialRuleResults?.length) {
+      lines.push("### Special Rules", "");
+      for (const result of validation.contentReview.specialRuleResults) {
+        const status = !result.applies ? "not applicable" : result.passes ? "passed" : "failed";
+        lines.push(`- ${result.ruleId}: ${status}${result.reason ? ` — ${result.reason}` : ""}`);
       }
       lines.push("");
     }
