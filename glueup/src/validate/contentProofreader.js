@@ -1,10 +1,12 @@
+import { SPECIAL_VALIDATION_RULES, specialRulePromptData } from "./specialValidationRules.js";
+
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 // Reviews public-facing structured fields and generated copy for clear typos.
 // It reports issues but never rewrites source text automatically.
 export async function proofreadEventContent({ event, speakers = [], artifacts = {}, rendered = {}, config = {} }) {
   if (!config.geminiApiKey) {
-    return { status: "skipped", reason: "GEMINI_API_KEY is not configured", issues: [] };
+    return { status: "skipped", reason: "GEMINI_API_KEY is not configured", issues: [], specialRuleResults: [] };
   }
 
   const reviewInput = {
@@ -37,7 +39,12 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
               "theological phrasing, or job titles merely because they are uncommon. Do flag an awkward singular/plural " +
               "or word-form error in a professional title when confidence is high. Never rewrite the content wholesale. " +
               "For each issue, quote the shortest exact original text, provide a minimal correction, identify its field, " +
-              "and explain briefly. Return no issue when uncertain.\n\n" + JSON.stringify(reviewInput)
+              "and explain briefly. Return no issue when uncertain. Separately evaluate EVERY special validation rule below. " +
+              "For each rule, return exactly one ruleResults entry with applies=true when the content semantically refers " +
+              "to the rule's subject even through abbreviations or alternate wording. Set passes=false if any applicable " +
+              "public-facing reference violates the instruction. Do not use spelling-pattern heuristics alone; evaluate " +
+              "the meaning and identity of the referenced place or entity.\n\n" +
+              JSON.stringify({ content: reviewInput, specialValidationRules: specialRulePromptData() })
           }]
         }],
         generationConfig: {
@@ -58,9 +65,25 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
                   },
                   required: ["field", "original", "suggestion", "reason", "confidence"]
                 }
+              },
+              ruleResults: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    ruleId: { type: "STRING" },
+                    applies: { type: "BOOLEAN" },
+                    passes: { type: "BOOLEAN" },
+                    field: { type: "STRING" },
+                    original: { type: "STRING" },
+                    suggestion: { type: "STRING" },
+                    reason: { type: "STRING" }
+                  },
+                  required: ["ruleId", "applies", "passes", "field", "original", "suggestion", "reason"]
+                }
               }
             },
-            required: ["issues"]
+            required: ["issues", "ruleResults"]
           }
         }
       }),
@@ -76,10 +99,24 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
     const issues = Array.isArray(parsed.issues)
       ? parsed.issues.filter((issue) => validIssue(issue, sourceText))
       : [];
-    return { status: "completed", reviewedAt: new Date().toISOString(), issues };
+    const knownRuleIds = new Set(SPECIAL_VALIDATION_RULES.map((rule) => rule.id));
+    const specialRuleResults = Array.isArray(parsed.ruleResults)
+      ? parsed.ruleResults.filter((result) => validRuleResult(result, knownRuleIds))
+      : [];
+    return { status: "completed", reviewedAt: new Date().toISOString(), issues, specialRuleResults };
   } catch (error) {
-    return { status: "skipped", reason: error.message, issues: [] };
+    return { status: "skipped", reason: error.message, issues: [], specialRuleResults: [] };
   }
+}
+
+function validRuleResult(result, knownRuleIds) {
+  return (
+    result &&
+    knownRuleIds.has(result.ruleId) &&
+    typeof result.applies === "boolean" &&
+    typeof result.passes === "boolean" &&
+    [result.field, result.original, result.suggestion, result.reason].every((value) => typeof value === "string")
+  );
 }
 
 // Strips HTML tags/entities so the proofreader reviews prose, not markup.
