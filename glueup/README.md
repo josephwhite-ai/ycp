@@ -202,7 +202,7 @@ The included workflow is `.github/workflows/glueup-monthly-prepare.yml`, run on 
 Add these repository secrets/variables:
 
 - Secret `GOOGLE_SERVICE_ACCOUNT_JSON`: full service account JSON.
-- Secret `OPENAI_API_KEY`: optional; deterministic template fill briefs work without it.
+- Secret `GEMINI_API_KEY`: used for template fill briefs, campaign-summary generation, proofreading, and image selection; deterministic content fallbacks work without it.
 - Secret `TAVILY_API_KEY`: optional; enables automatic source-linked speaker image search when Drive has no photo.
 - Variable `GLUEUP_EVENTS_FOLDER_ID`: optional override for the top-level Drive folder.
 

@@ -17,6 +17,5 @@ This repository contains automation projects for YCP workflows.
 ## Secrets
 
 - GOOGLE_SERVICE_ACCOUNT_JSON: service account JSON used by both apps.
-- GEMINI_API_KEY: required for the Gemini bulletin workflow.
+- GEMINI_API_KEY: used for the Gemini bulletin workflow and Glue Up content generation, proofreading, and image selection.
 - ANTHROPIC_API_KEY: required for the Claude bulletin workflow.
-- OPENAI_API_KEY: optional for Glue Up template-brief generation; deterministic briefs work without it.

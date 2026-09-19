@@ -203,6 +203,20 @@ export function descriptionToHtml(description) {
     .join("");
 }
 
+// Offline fallback: keep preparation functional without inventing facts when
+// Gemini is unavailable. The normal path asks Gemini for a polished summary.
+export function shortenEventSummary(description, { maxWords = 90 } = {}) {
+  const text = String(description || "").replace(/\s+/g, " ").trim();
+  if (!text) return "Event details coming soon.";
+  const words = text.split(" ");
+  if (words.length <= maxWords) return text;
+
+  const bounded = words.slice(0, maxWords).join(" ");
+  const lastSentenceEnd = Math.max(bounded.lastIndexOf("."), bounded.lastIndexOf("!"), bounded.lastIndexOf("?"));
+  if (lastSentenceEnd >= Math.floor(bounded.length * 0.6)) return bounded.slice(0, lastSentenceEnd + 1);
+  return `${bounded.replace(/[,:;\s]+$/, "")}…`;
+}
+
 // "Featured Speakers" HTML list for the invitation campaign email body. Takes the
 // already-parsed speakers array; returns null when there are none.
 export function buildCampaignSpeakersHtml(speakers) {
@@ -218,15 +232,24 @@ export function buildCampaignSpeakersHtml(speakers) {
   return `<p><strong>Featured Speakers</strong></p><ul>${items}</ul>`;
 }
 
+// The concise body copy used by invitation campaigns. Gemini supplies the
+// prepared summary when available; older/offline runs receive the same bounded
+// deterministic fallback used by content generation.
+export function buildCampaignSummaryHtml(event, campaignSummary) {
+  const text = String(campaignSummary || "").trim() || shortenEventSummary(event?.description);
+  return descriptionToHtml(text);
+}
+
 // Renders every final published string into one bundle. `prepare` persists this
 // as content-render.json so the content-review pass reviews exactly what gets
 // published, and `populate` transfers these strings verbatim.
-export function renderPublishedContent({ event, speakers = [] }) {
+export function renderPublishedContent({ event, speakers = [], campaignSummary = "" }) {
   return {
     renderedAt: new Date().toISOString(),
     summaryHtml: eventSummaryHtml(event),
     pageScheduleHtml: buildEventScheduleHtml(event),
     enableSpeakers: speakers.length > 0,
+    campaignSummaryHtml: buildCampaignSummaryHtml(event, campaignSummary),
     campaignSpeakersHtml: buildCampaignSpeakersHtml(speakers),
     widgets: PUBLIC_PAGE_WIDGETS
   };

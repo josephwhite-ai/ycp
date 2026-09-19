@@ -233,17 +233,16 @@ function eventPreheader(event) {
   return `Join us for ${title}.`;
 }
 
-export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign, speakersHtml } = {}) {
+export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign, campaignSummaryHtml, speakersHtml } = {}) {
   if (!eventId) throw new Error("Missing Glue Up event ID.");
   const title = event?.eventName || event?.sourceDocumentTitle || "Event";
-  // Email body blocks. The optional speakers block (built by the caller from the
-  // event's parsed speakers) is inserted after the event summary so invitees see
-  // who is presenting.
+  // Email body blocks. Prepared campaign copy replaces Glue Up's dynamic summary
+  // block, which would otherwise repeat the full event-page description.
   const contentBlocks = [
     { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
     { type: "detailsHeader" },
     { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
-    { type: "summary" },
+    campaignSummaryHtml ? { type: "html", value: campaignSummaryHtml } : { type: "summary" },
     ...(speakersHtml ? [{ type: "html", value: speakersHtml }] : []),
     { type: "rsvp" },
     {

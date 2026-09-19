@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildCampaignSummaryHtml,
   centerSummaryHtml,
   eventSummaryHtml,
-  preservesBoldText
+  preservesBoldText,
+  renderPublishedContent
 } from "../src/generate/eventContent.js";
 
 test("centers plain-text event summary paragraphs", () => {
@@ -48,4 +50,19 @@ test("detects bold formatting lost during persistence", () => {
     ),
     false
   );
+});
+
+test("renders prepared campaign summary as escaped paragraph HTML", () => {
+  assert.equal(
+    buildCampaignSummaryHtml({}, "Join us for faith & fellowship."),
+    "<p>Join us for faith &amp; fellowship.</p>"
+  );
+});
+
+test("published content includes the prepared campaign summary", () => {
+  const rendered = renderPublishedContent({
+    event: { description: "A much longer source summary." },
+    campaignSummary: "A concise invitation."
+  });
+  assert.equal(rendered.campaignSummaryHtml, "<p>A concise invitation.</p>");
 });
