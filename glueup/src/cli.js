@@ -184,7 +184,8 @@ async function prepare(args) {
   const normalizedEvent = normalizeEventFields(event);
   const renderedContent = renderPublishedContent({
     event: normalizedEvent,
-    speakers: normalizeEventSpeakers(normalizedEvent)
+    speakers: normalizeEventSpeakers(normalizedEvent),
+    campaignSummary: artifacts.campaignSummary
   });
   const contentReview = await proofreadEventContent({
     event,
@@ -1433,14 +1434,16 @@ async function loadRenderedContent(runDir, event) {
     console.log("content-render.json not found; rendering content locally from event.json.");
     return renderPublishedContent({ event, speakers });
   }
-  return normalizeRenderedSpeakerContent(await readJson(path), speakers);
+  return normalizeRenderedSpeakerContent(await readJson(path), speakers, event);
 }
 
-function normalizeRenderedSpeakerContent(rendered, speakers) {
+function normalizeRenderedSpeakerContent(rendered, speakers, event) {
   const hasSpeakers = speakers.length > 0;
+  const fallback = renderPublishedContent({ event, speakers });
   return {
     ...rendered,
     enableSpeakers: hasSpeakers,
+    campaignSummaryHtml: rendered.campaignSummaryHtml || fallback.campaignSummaryHtml,
     campaignSpeakersHtml: buildCampaignSpeakersHtml(speakers),
     widgets: hasSpeakers
       ? rendered.widgets || PUBLIC_PAGE_WIDGETS
@@ -1746,6 +1749,7 @@ async function populateCampaigns(args) {
   printAuthNote(auth);
   const normalizedEvent = normalizeEventFields(event);
   const rendered = await loadRenderedContent(runDir, normalizedEvent);
+  const campaignSummaryHtml = rendered.campaignSummaryHtml;
   const speakersHtml = rendered.campaignSpeakersHtml;
   for (const campaign of targetCampaigns) {
     const planned = CAMPAIGN_PLAN.find((item) => item.key === campaign.key);
@@ -1756,7 +1760,13 @@ async function populateCampaigns(args) {
     await applyCampaignSetup({
       eventId,
       campaignId: campaign.campaignId,
-      payloads: buildDefaultCampaignSetupPayloads({ eventId, event: normalizedEvent, campaign, speakersHtml }),
+      payloads: buildDefaultCampaignSetupPayloads({
+        eventId,
+        event: normalizedEvent,
+        campaign,
+        campaignSummaryHtml,
+        speakersHtml
+      }),
       cookie: auth.cookie,
       orgId: auth.orgId
     });

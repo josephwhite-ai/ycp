@@ -1,13 +1,16 @@
 import { parseEventAgenda, selectPublicAgenda, formatAgendaRange } from "../extract/agenda.js";
+import { shortenEventSummary } from "./eventContent.js";
+
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export async function generateArtifacts({ event, photos, config }) {
-  if (config.openaiApiKey) {
+  if (config.geminiApiKey) {
     try {
-      return await generateWithOpenAI({ event, photos, config });
+      return await generateWithGemini({ event, photos, config });
     } catch (error) {
       return {
         ...generateDeterministicArtifacts({ event, photos }),
-        generationWarning: `OpenAI generation failed; used deterministic templates instead. ${error.message}`
+        generationWarning: `Gemini generation failed; used deterministic templates instead. ${error.message}`
       };
     }
   }
@@ -71,6 +74,7 @@ ${event.description || ""}
 
   return {
     webpage,
+    campaignSummary: shortenEventSummary(event.description),
     emails: {
       weekBefore: campaignTemplateBrief,
       dayBefore: campaignTemplateBrief
@@ -83,7 +87,8 @@ ${event.description || ""}
     }))
   };
 }
-async function generateWithOpenAI({ event, photos, config }) {
+
+async function generateWithGemini({ event, photos, config }) {
   // Sanitize the agenda before sending it to the model: expose only the public
   // schedule and strip internal leadership rows from the raw time block so they
   // can never surface in generated public copy.
@@ -103,81 +108,80 @@ async function generateWithOpenAI({ event, photos, config }) {
       }
     : { ...event, publicSchedule };
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch(`${GEMINI_BASE}/models/${config.geminiModel}:generateContent`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${config.openaiApiKey}`,
-      "Content-Type": "application/json"
+      "content-type": "application/json",
+      "x-goog-api-key": config.geminiApiKey
     },
     body: JSON.stringify({
-      model: config.openaiModel,
-      input: [
-        {
-          role: "system",
-          content:
-            "You generate concise Glue Up event-template field briefs and campaign-template fill briefs from structured event data. Do not invent campaign templates or standalone email layouts. Return strict JSON only."
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            task:
-              "Create a webpage field brief for filling the approved Glue Up event template, a one-week-before campaign-template fill brief, a day-before campaign-template fill brief, and rank photo recommendations. Do not write standalone email campaigns from scratch. For any schedule or agenda, use only event.publicSchedule; never include internal setup, cleanup, or leadership-team items.",
-            event: sanitizedEvent,
-            photos: photos.map((photo) => ({
-              id: photo.id,
-              name: photo.name,
-              webViewLink: photo.webViewLink || ""
-            }))
-          })
-        }
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "glueup_event_artifacts",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              webpage: { type: "string" },
-              emails: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  weekBefore: { type: "string" },
-                  dayBefore: { type: "string" }
-                },
-                required: ["weekBefore", "dayBefore"]
+      contents: [{
+        role: "user",
+        parts: [{
+          text:
+            "Generate concise Glue Up event-template field briefs from the supplied structured event data. " +
+            "Do not invent facts, campaign templates, or standalone email layouts. The campaignSummary must be " +
+            "a self-contained, inviting plain-text condensation of the source event description, normally 40-80 words " +
+            "and never longer than the source; do not pad a short source or add facts. It must be " +
+            "suitable as the main body of an invitation email. Return only the requested JSON.\n\n" +
+            JSON.stringify({
+              task:
+                "Create a webpage field brief, a shortened campaign summary, one-week-before and day-before campaign-template fill briefs, and ranked photo recommendations. For any schedule or agenda, use only event.publicSchedule; never include internal setup, cleanup, or leadership-team items.",
+              event: sanitizedEvent,
+              photos: photos.map((photo) => ({
+                id: photo.id,
+                name: photo.name,
+                webViewLink: photo.webViewLink || ""
+              }))
+            })
+        }]
+      }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            webpage: { type: "STRING" },
+            campaignSummary: { type: "STRING" },
+            emails: {
+              type: "OBJECT",
+              properties: {
+                weekBefore: { type: "STRING" },
+                dayBefore: { type: "STRING" }
               },
-              photoRecommendations: {
-                type: "array",
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    rank: { type: "number" },
-                    id: { type: "string" },
-                    name: { type: "string" },
-                    webViewLink: { type: "string" },
-                    reason: { type: "string" }
-                  },
-                  required: ["rank", "id", "name", "webViewLink", "reason"]
-                }
-              }
+              required: ["weekBefore", "dayBefore"]
             },
-            required: ["webpage", "emails", "photoRecommendations"]
-          }
+            photoRecommendations: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  rank: { type: "NUMBER" },
+                  id: { type: "STRING" },
+                  name: { type: "STRING" },
+                  webViewLink: { type: "STRING" },
+                  reason: { type: "STRING" }
+                },
+                required: ["rank", "id", "name", "webViewLink", "reason"]
+              }
+            }
+          },
+          required: ["webpage", "campaignSummary", "emails", "photoRecommendations"]
         }
       }
     })
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI request failed ${response.status}: ${await response.text()}`);
+    throw new Error(`Gemini request failed ${response.status}: ${await response.text()}`);
   }
 
   const data = await response.json();
-  const text = data.output_text || data.output?.flatMap((item) => item.content || []).find((part) => part.text)?.text;
-  if (!text) throw new Error("OpenAI response did not include output text.");
-  return JSON.parse(text);
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini response did not include output text.");
+  const generated = JSON.parse(text);
+  return {
+    ...generated,
+    campaignSummary: shortenEventSummary(generated.campaignSummary || event.description)
+  };
 }

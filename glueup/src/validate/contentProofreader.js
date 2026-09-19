@@ -22,6 +22,7 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
     // populate transfers, not just the source fields and briefs.
     publishedSummary: htmlToText(rendered.summaryHtml),
     publishedSchedule: htmlToText(rendered.pageScheduleHtml),
+    publishedCampaignSummary: htmlToText(rendered.campaignSummaryHtml),
     publishedCampaignSpeakers: htmlToText(rendered.campaignSpeakersHtml)
   };
 

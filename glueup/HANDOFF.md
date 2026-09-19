@@ -28,7 +28,7 @@ Current baseline:
   - A multi-line `time` block is parsed into agenda rows; the event window spans the **public** rows only (first public start to last public end). Internal leadership rows are excluded so setup/cleanup never widen the window.
   - Internal rows are detected three ways (union): the **sandwich structure** (in a 3+ row agenda the first and last rows are always internal), a `(…leadership/staff/crew/team…)`-style parenthetical, OR setup/teardown keywords (set up, clean up, load in/out, tear down, strike).
   - The sandwich rule requires 3+ rows so a single overall time range or a two-item list is never hollowed out; the tag/keyword detection still covers those shorter cases.
-  - The public rows are also stored on `event.agenda`, rendered as a `## Schedule` section in `webpage.md`, and exposed to the OpenAI generator as `event.publicSchedule` (with the raw internal rows stripped from the prompt).
+  - The public rows are also stored on `event.agenda`, rendered as a `## Schedule` section in `webpage.md`, and exposed to the Gemini generator as `event.publicSchedule` (with the raw internal rows stripped from the prompt).
 - [x] Event timezone
   - Source: config timezone, default `America/New_York`
   - Current target: settings/general `venue.timezone` or `timezone`
@@ -89,18 +89,18 @@ public-facing strings are rendered in `prepare` and carried in the artifact;
 `populate` is a dumb transfer agent that pushes them verbatim.
 
 - `src/generate/eventContent.js` is the single source of truth for rendered
-  content (pure functions, no Glue Up/network): `renderPublishedContent({ event, speakers })`
-  returns `{ summaryHtml, pageScheduleHtml, enableSpeakers, campaignSpeakersHtml, widgets }`.
+  content (pure functions, no Glue Up/network): `renderPublishedContent({ event, speakers, campaignSummary })`
+  returns `{ summaryHtml, pageScheduleHtml, enableSpeakers, campaignSummaryHtml, campaignSpeakersHtml, widgets }`.
   It owns the schedule/where-when/venue-line/date builders, the YCP "Join us"
   CTA, `descriptionToHtml`, and `buildCampaignSpeakersHtml`.
 - `prepare` renders from the **normalized** event (`normalizeEventFields` — the
   same normalization `populate` applies), writes `content-render.json` into the
   run, then passes the bundle to `proofreadEventContent` (which strips tags via
-  `htmlToText` and reviews `publishedSummary`/`publishedSchedule`/`publishedCampaignSpeakers`).
+  `htmlToText` and reviews `publishedSummary`/`publishedSchedule`/`publishedCampaignSummary`/`publishedCampaignSpeakers`).
 - `populate` loads the bundle via `loadRenderedContent(runDir, event)` and pushes
   it: `populateEventSummaryViaSummaryPage({ summaryHtml })`,
   `populateEventPageContentViaDesignPage({ scheduleHtml, enableSpeakers, widgets })`,
-  and `buildDefaultCampaignSetupPayloads({ speakersHtml })`. These no longer
+  and `buildDefaultCampaignSetupPayloads({ campaignSummaryHtml, speakersHtml })`. These no longer
   author content — they only transfer it.
 - **Fallback:** if `content-render.json` is absent (older artifacts / local
   debugging), `loadRenderedContent` renders once via the same module and logs it.
@@ -161,7 +161,7 @@ For event 7 specifically: only Joseph Frissora III lacks a Drive photo (Justin M
   - Most images are `.HEIC`/`.heif` (iPhone); some are designed graphics (PNG/JPEG). Listing a shared-drive root needs `corpora=drive&driveId=...` (see `listChildren({ driveId })`).
   - Decisions: rank candidates by **Gemini vision** (reusing the Google service account — no separate AI vendor key); **convert HEIC→JPEG** via a `heic-convert` dependency.
   - Key design: **choose first, then convert.** We do NOT bulk-convert HEIC. Ranking runs on Drive's server-generated JPEG **thumbnails** (`thumbnailLink`, exists even for HEIC), so `heic-convert` runs at most once — only on the single chosen winner.
-  - Why Gemini, not OpenAI: the prior draft used OpenAI (`OPENAI_API_KEY`), which likely isn't set in CI and adds a second vendor. The project already authenticates to Google with a service account; that same key mints a `cloud-platform`-scoped token to call the Generative Language API. Stays in the Google ecosystem.
+  - Gemini is the project's sole generative-AI provider; copy generation and image ranking share the configured Gemini model.
   - Stage 1 DONE: `gatherBannerCandidates(drive)` walks most-recent year → recent subfolders → newest images (cap `BANNER_CANDIDATE_LIMIT`); now also requests each image's `thumbnailLink`.
   - Stages 2–4 DONE: `selectBannerCandidate` (`src/generate/bannerSelector.js`) downloads the candidates' upsized thumbnails (`=s800`) and ranks them with Gemini `generateContent` (`config.geminiModel`, default `gemini-2.5-flash-lite`, `responseSchema` JSON `chosenId`+`ranking`), authing via `googleAccessToken(GENAI_SCOPES)`. `prepareBannerImage` (in `prepare`) downloads only the winner's original, converts via `toBannerImage` (HEIC→JPEG with lazily-imported `heic-convert`; PNG kept; else `.jpg`), and writes `banner.jpg` (or `.png`) + `banner.json` (sourceId/name/folder/reason/ranking) into the run. Falls back to the newest candidate when ranking is unavailable (no creds / no thumbnails) so a banner is still produced. All non-fatal — failure logs and continues.
   - Auth plumbing: `googleDriveClient.js` now exposes `googleAccessToken(scopes)` + `GENAI_SCOPES`; the service-account/ADC paths mint any requested scope, so one key serves both Drive (readonly) and Gemini (cloud-platform). Pre-supplied `GOOGLE_ACCESS_TOKEN` or gcloud login carry fixed scopes (best-effort).
