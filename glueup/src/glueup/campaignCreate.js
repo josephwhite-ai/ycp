@@ -236,15 +236,16 @@ function eventPreheader(event) {
 export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign, campaignSummaryHtml, speakersHtml } = {}) {
   if (!eventId) throw new Error("Missing Glue Up event ID.");
   const title = event?.eventName || event?.sourceDocumentTitle || "Event";
-  // Email body blocks. Prepared campaign copy replaces Glue Up's dynamic summary
-  // block, which would otherwise repeat the full event-page description.
+  // Email body blocks. Keep the RSVP action prominent immediately after the
+  // organization logo and event details. Prepared campaign copy replaces Glue
+  // Up's dynamic summary block, which would otherwise repeat the full event-page description.
   const contentBlocks = [
     { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
     { type: "detailsHeader" },
+    { type: "rsvp" },
     { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
     campaignSummaryHtml ? { type: "html", value: campaignSummaryHtml } : { type: "summary" },
     ...(speakersHtml ? [{ type: "html", value: speakersHtml }] : []),
-    { type: "rsvp" },
     {
       type: "sponsors",
       "value.groups.6a3096bae4b07b64411cbe1b": true,

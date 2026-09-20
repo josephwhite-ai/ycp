@@ -12,7 +12,10 @@ test("campaign setup uses prepared concise summary instead of Glue Up full-summa
     speakersHtml: "<p><strong>Featured Speakers</strong></p>"
   });
   const content = payloads.find(({ action }) => action === "ContentFormSubmit");
-  assert.deepEqual(content.data.blocks.slice(2, 5), [
+  assert.deepEqual(content.data.blocks.slice(0, 6), [
+    { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
+    { type: "detailsHeader" },
+    { type: "rsvp" },
     { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
     { type: "html", value: "<p>Concise campaign copy.</p>" },
     { type: "html", value: "<p><strong>Featured Speakers</strong></p>" }
