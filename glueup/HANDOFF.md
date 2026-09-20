@@ -70,7 +70,7 @@ Current baseline:
   - Reordering the blocks programmatically was abandoned: the customizer keeps block state in an in-memory model inside a preview iframe that never appears in any HTTP response, and block ids are per-event. Overwriting the two content blocks (above) is the supported path instead.
   - Can be run alone with `npm run populate-page -- --event <index>`.
 - [x] Speaker details in invitation campaigns
-  - `buildDefaultCampaignSetupPayloads` inserts a "Featured Speakers" `html` block (name — position, company, built by `buildCampaignSpeakersHtml`) after the `summary` block in the `ContentFormSubmit` email body. Applied to both the week-before and day-before campaigns.
+  - `buildDefaultCampaignSetupPayloads` inserts Glue Up's native `speakers` block after the prepared campaign summary. `populate-campaigns` resolves each event speaker's 24-hex Glue Up ID and selects it through `value.speakers.<id>: true`, so Glue Up renders its built-in headshot/name/title/company layout. Applied to both the week-before and day-before campaigns; missing speaker IDs block population instead of silently omitting a speaker.
 - [x] Special event templates (`templates/<keyword>/template.json`)
   - Matched by keyword against the summary sheet during `prepare` (or backfilled/refreshed during `ensure` while unresolved). Can carry static page blocks (`pageTemplate.content`, `{{scheduleHtml}}` substituted per event at populate time), a pinned blueprint (`glueUp.eventType`/`blueprintCode`, applied to `template-selection.json` and validation so event types outside the taxonomy still select a blueprint), and a banner (`banner.sourceUrl`, downloaded into the run dir during local `ensure`; manual banner drops without `banner.json` are left alone).
   - **Why static blocks:** the Yard Goats model event 145378 predates the org's v2 site templates — its admin design page 302s to the template chooser, so it can never be resolved live (`resolveGlueUpPageTemplateReference` finds no content). Live resolution via `pageTemplate.sourceUrl` still works for v2-era source events.
@@ -90,9 +90,9 @@ public-facing strings are rendered in `prepare` and carried in the artifact;
 
 - `src/generate/eventContent.js` is the single source of truth for rendered
   content (pure functions, no Glue Up/network): `renderPublishedContent({ event, speakers, campaignSummary })`
-  returns `{ summaryHtml, pageScheduleHtml, enableSpeakers, campaignSummaryHtml, campaignSpeakersHtml, widgets }`.
+  returns `{ summaryHtml, pageScheduleHtml, enableSpeakers, campaignSummaryHtml, widgets }`.
   It owns the schedule/where-when/venue-line/date builders, the YCP "Join us"
-  CTA, `descriptionToHtml`, and `buildCampaignSpeakersHtml`.
+  CTA, and `descriptionToHtml`.
 - `prepare` renders from the **normalized** event (`normalizeEventFields` — the
   same normalization `populate` applies), writes `content-render.json` into the
   run, then passes the bundle to `proofreadEventContent` (which strips tags via
@@ -100,7 +100,7 @@ public-facing strings are rendered in `prepare` and carried in the artifact;
 - `populate` loads the bundle via `loadRenderedContent(runDir, event)` and pushes
   it: `populateEventSummaryViaSummaryPage({ summaryHtml })`,
   `populateEventPageContentViaDesignPage({ scheduleHtml, enableSpeakers, widgets })`,
-  and `buildDefaultCampaignSetupPayloads({ campaignSummaryHtml, speakersHtml })`. These no longer
+  and `buildDefaultCampaignSetupPayloads({ campaignSummaryHtml, speakerIds })`. These no longer
   author content — they only transfer it.
 - **Fallback:** if `content-render.json` is absent (older artifacts / local
   debugging), `loadRenderedContent` renders once via the same module and logs it.
@@ -124,7 +124,7 @@ Drive photos always take precedence.
 Context already in place (reuse, don't rebuild):
 - `gatherSpeakerPhotos` (in `prepare`, `src/cli.js`) pulls Drive headshots into `runs/<run>/speaker-photos/` + writes `speaker-photos.json` (entries: `fullName`, `firstName`, `lastName`, `position`, `company`, `photoFile`, `source`). Speakers missing here are the fallback candidates.
 - `normalizeEventSpeakers(event)` yields the parsed speakers (`fullName`, `position`, `company`, …).
-- `populateEventSpeakersViaAjax` already **upserts by id**: `findExistingSpeakerId(html, fullName)` parses the existing speaker's 24-hex id from the speakers page, and `create-manual-speaker` with that id updates (used to attach a photo to a speaker created in an earlier run). So once a fallback image lands in the run as a `speaker-photos.json` entry with a `photoFile`, the existing populate/update path uploads it via `uploadGlueUpSpeakerImage` with no further changes.
+- `populateEventSpeakersViaAjax` already **upserts by id**: `findGlueUpSpeakerId(html, fullName)` parses the existing speaker's 24-hex id from the speakers page, and `create-manual-speaker` with that id updates (used to attach a photo to a speaker created in an earlier run). So once a fallback image lands in the run as a `speaker-photos.json` entry with a `photoFile`, the existing populate/update path uploads it via `uploadGlueUpSpeakerImage` with no further changes.
 
 Setup the operator must provision once:
 - Create a Tavily API key at app.tavily.com.

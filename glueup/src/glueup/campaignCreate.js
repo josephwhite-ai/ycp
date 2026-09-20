@@ -233,19 +233,48 @@ function eventPreheader(event) {
   return `Join us for ${title}.`;
 }
 
-export function buildDefaultCampaignSetupPayloads({ eventId, event, campaign, campaignSummaryHtml, speakersHtml } = {}) {
+export function findGlueUpSpeakerId(html, fullName) {
+  const esc = String(fullName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!esc) return null;
+  const match = String(html || "").match(
+    new RegExp(`data-id="([a-f0-9]{24})"[^>]*>\\s*<script[^>]*>\\{[^<]*?"name":"${esc}"`)
+  );
+  return match ? match[1] : null;
+}
+
+export function buildNativeSpeakersBlock(speakerIds = []) {
+  const ids = [...new Set(speakerIds.filter(Boolean))];
+  if (!ids.length) return null;
+  for (const id of ids) {
+    if (!/^[a-f0-9]{24}$/.test(id)) throw new Error(`Invalid Glue Up speaker ID: ${id}`);
+  }
+  return {
+    type: "speakers",
+    ...Object.fromEntries(ids.map((id) => [`value.speakers.${id}`, true]))
+  };
+}
+
+export function buildDefaultCampaignSetupPayloads({
+  eventId,
+  event,
+  campaign,
+  campaignSummaryHtml,
+  speakerIds = []
+} = {}) {
   if (!eventId) throw new Error("Missing Glue Up event ID.");
   const title = event?.eventName || event?.sourceDocumentTitle || "Event";
+  const speakersBlock = buildNativeSpeakersBlock(speakerIds);
   // Email body blocks. Keep the RSVP action prominent immediately after the
   // organization logo and event details. Prepared campaign copy replaces Glue
-  // Up's dynamic summary block, which would otherwise repeat the full event-page description.
+  // Up's dynamic summary block, which would otherwise repeat the full
+  // event-page description.
   const contentBlocks = [
     { type: "organizationLogo", "value.size": "S", "value.alignment": "Left" },
     { type: "detailsHeader" },
     { type: "rsvp" },
     { type: "html", value: "<p>Dear [givenName,fallback=Subscriber],</p>" },
     campaignSummaryHtml ? { type: "html", value: campaignSummaryHtml } : { type: "summary" },
-    ...(speakersHtml ? [{ type: "html", value: speakersHtml }] : []),
+    ...(speakersBlock ? [speakersBlock] : []),
     {
       type: "sponsors",
       "value.groups.6a3096bae4b07b64411cbe1b": true,

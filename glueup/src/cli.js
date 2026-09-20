@@ -15,7 +15,6 @@ import { GoogleDriveClient } from "./drive/googleDriveClient.js";
 import { extractEventFromGoogleDoc, normalizeEventFields } from "./extract/docsTableExtractor.js";
 import {
   PUBLIC_PAGE_WIDGETS,
-  buildCampaignSpeakersHtml,
   preservesBoldText,
   renderPublishedContent
 } from "./generate/eventContent.js";
@@ -31,6 +30,7 @@ import {
   applyCampaignSetup,
   buildDefaultCampaignSetupPayloads,
   extractCampaignSetupPayloads,
+  findGlueUpSpeakerId,
   scheduleCampaign
 } from "./glueup/campaignCreate.js";
 import { ensureGlueUpAuth, GLUEUP_BASE_URL, loginGlueUp } from "./glueup/session.js";
@@ -1444,7 +1444,6 @@ function normalizeRenderedSpeakerContent(rendered, speakers, event) {
     ...rendered,
     enableSpeakers: hasSpeakers,
     campaignSummaryHtml: rendered.campaignSummaryHtml || fallback.campaignSummaryHtml,
-    campaignSpeakersHtml: buildCampaignSpeakersHtml(speakers),
     widgets: hasSpeakers
       ? rendered.widgets || PUBLIC_PAGE_WIDGETS
       : (rendered.widgets || PUBLIC_PAGE_WIDGETS).filter((widget) => widget !== "speakersWidget")
@@ -1750,7 +1749,11 @@ async function populateCampaigns(args) {
   const normalizedEvent = normalizeEventFields(event);
   const rendered = await loadRenderedContent(runDir, normalizedEvent);
   const campaignSummaryHtml = rendered.campaignSummaryHtml;
-  const speakersHtml = rendered.campaignSpeakersHtml;
+  const speakerIds = await resolveCampaignSpeakerIds({
+    eventId,
+    speakers: normalizeEventSpeakers(normalizedEvent),
+    cookie: auth.cookie
+  });
   for (const campaign of targetCampaigns) {
     const planned = CAMPAIGN_PLAN.find((item) => item.key === campaign.key);
     if (planned) {
@@ -1765,7 +1768,7 @@ async function populateCampaigns(args) {
         event: normalizedEvent,
         campaign,
         campaignSummaryHtml,
-        speakersHtml
+        speakerIds
       }),
       cookie: auth.cookie,
       orgId: auth.orgId
@@ -1780,6 +1783,24 @@ async function populateCampaigns(args) {
     campaigns: targetCampaigns.length === campaigns.length ? targetCampaigns : campaigns
   };
   await writeJson(join(runDir, "manifest.json"), manifest);
+}
+
+async function resolveCampaignSpeakerIds({ eventId, speakers, cookie }) {
+  if (!speakers.length) return [];
+  const path = `/events/${eventId}/publishing/content/speakers/`;
+  const html = await fetchGlueUpPageHtml({ path, cookie });
+  const resolved = speakers.map((speaker) => ({
+    name: speaker.fullName,
+    id: findGlueUpSpeakerId(html, speaker.fullName)
+  }));
+  const missing = resolved.filter(({ id }) => !id).map(({ name }) => name);
+  if (missing.length) {
+    throw new Error(
+      `Cannot build the native Glue Up speakers block because these event speakers were not found: ${missing.join(", ")}. ` +
+      "Run populate-speakers, then populate-campaigns again."
+    );
+  }
+  return resolved.map(({ id }) => id);
 }
 
 async function scheduleCampaigns(args) {
@@ -2319,7 +2340,7 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
   const populated = [];
   for (const speaker of speakers) {
     const exists = pageHtml.includes(speaker.fullName);
-    const existingId = exists ? findExistingSpeakerId(pageHtml, speaker.fullName) : null;
+    const existingId = exists ? findGlueUpSpeakerId(pageHtml, speaker.fullName) : null;
     // Existing speaker with no new photo to apply: nothing to do.
     if (exists && !speaker.photoPath) {
       console.log(`Skipping existing speaker: ${speaker.fullName}`);
@@ -2380,16 +2401,6 @@ async function populateEventSpeakersViaAjax({ eventId, speakers, cookie, csrfTok
     populated.push(speaker);
   }
   return populated;
-}
-
-// Parses an existing manual speaker's id from the speakers page. Each speaker
-// renders as <dd ... data-id="<24-hex>"><script type="application/json">{… "name":"<full name>" …}.
-function findExistingSpeakerId(html, fullName) {
-  const esc = fullName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = html.match(
-    new RegExp(`data-id="([a-f0-9]{24})"[^>]*>\\s*<script[^>]*>\\{[^<]*?"name":"${esc}"`)
-  );
-  return match ? match[1] : null;
 }
 
 // Uploads a speaker headshot and returns the cropped square image object for the
