@@ -101,17 +101,21 @@ function buildEventWhereWhenHtml(event, rows = []) {
   return parts.join("");
 }
 
+function publicAgendaRows(event) {
+  const agenda =
+    Array.isArray(event?.agenda) && event.agenda.length
+      ? event.agenda
+      : parseEventAgenda(rawEventField(event, ["time", "schedule", "agenda", "run of show"]));
+  return selectPublicAgenda(agenda);
+}
+
 // Block 1 of the public event page: a full "Schedule" section for a real
 // multi-row run-of-show, otherwise the compact emoji where/when block, plus the
 // YCP "Join us" CTA.
 export function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) {
   // `event.agenda` is only set at extraction time, so derive it from the raw
   // "time" field when missing (older artifacts), keeping the block populated.
-  const agenda =
-    Array.isArray(event?.agenda) && event.agenda.length
-      ? event.agenda
-      : parseEventAgenda(rawEventField(event, ["time", "schedule", "agenda", "run of show"]));
-  const rows = selectPublicAgenda(agenda);
+  const rows = publicAgendaRows(event);
   const isMultiline = rows.length >= 2 && !descriptionHasSchedule(event);
 
   const parts = [];
@@ -222,7 +226,7 @@ export function shortenEventSummary(description, { maxWords = 90 } = {}) {
 // deterministic fallback used by content generation.
 export function buildCampaignSummaryHtml(event, campaignSummary) {
   const text = String(campaignSummary || "").trim() || shortenEventSummary(event?.description);
-  return descriptionToHtml(text);
+  return `${descriptionToHtml(text)}${buildEventWhereWhenHtml(event, publicAgendaRows(event))}`;
 }
 
 // Renders every final published string into one bundle. `prepare` persists this
