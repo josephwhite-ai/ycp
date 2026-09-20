@@ -45,6 +45,8 @@ The agent should not design new event pages or email campaigns from scratch. Glu
 
 All final public-facing copy is rendered during `prepare` (in `src/generate/eventContent.js`) and stored in the run as `content-render.json`, so the proofreading pass reviews exactly what will be published. `populate` is a transfer agent: it pushes those precomputed strings to Glue Up rather than re-authoring them. (If an older artifact lacks `content-render.json`, `populate` renders once locally via the same module.)
 
+Invitation campaigns use Glue Up's native `speakers` email block. During `populate-campaigns`, every parsed event speaker is matched to the corresponding Glue Up speaker ID and explicitly selected, allowing Glue Up to render its standard headshot, name, title, and organization presentation.
+
 Current approved template taxonomy:
 
 - St Joseph Saturdays: Glue Up Offline blueprint `90664`

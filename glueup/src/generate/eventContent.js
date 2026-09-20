@@ -217,21 +217,6 @@ export function shortenEventSummary(description, { maxWords = 90 } = {}) {
   return `${bounded.replace(/[,:;\s]+$/, "")}…`;
 }
 
-// "Featured Speakers" HTML list for the invitation campaign email body. Takes the
-// already-parsed speakers array; returns null when there are none.
-export function buildCampaignSpeakersHtml(speakers) {
-  const list = Array.isArray(speakers) ? speakers : [];
-  if (!list.length) return null;
-  const items = list
-    .map((speaker) => {
-      const name = escapeHtml(speaker.fullName);
-      const detail = [speaker.position, speaker.company].filter(Boolean).join(", ");
-      return `<li><strong>${name}</strong>${detail ? `&nbsp;&ndash;&nbsp;${escapeHtml(detail)}` : ""}</li>`;
-    })
-    .join("");
-  return `<p><strong>Featured Speakers</strong></p><ul>${items}</ul>`;
-}
-
 // The concise body copy used by invitation campaigns. Gemini supplies the
 // prepared summary when available; older/offline runs receive the same bounded
 // deterministic fallback used by content generation.
@@ -250,7 +235,6 @@ export function renderPublishedContent({ event, speakers = [], campaignSummary =
     pageScheduleHtml: buildEventScheduleHtml(event),
     enableSpeakers: speakers.length > 0,
     campaignSummaryHtml: buildCampaignSummaryHtml(event, campaignSummary),
-    campaignSpeakersHtml: buildCampaignSpeakersHtml(speakers),
     widgets: PUBLIC_PAGE_WIDGETS
   };
 }
