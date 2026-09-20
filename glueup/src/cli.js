@@ -19,6 +19,7 @@ import {
   renderPublishedContent
 } from "./generate/eventContent.js";
 import { generateArtifacts } from "./generate/contentGenerator.js";
+import { applyInterpretedEventFields, interpretEventFields } from "./generate/interpretEventFields.js";
 import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
@@ -148,7 +149,10 @@ async function prepare(args) {
     drive.getGoogleDoc(docFile.id),
     drive.listImagesRecursive(eventFolder.id)
   ]);
-  const event = addPreparedSpeakerOverride(extractEventFromGoogleDoc(doc), args.additionalSpeaker);
+  const extractedEvent = addPreparedSpeakerOverride(extractEventFromGoogleDoc(doc), args.additionalSpeaker);
+  const interpretedFields = await interpretEventFields({ event: extractedEvent, config });
+  const event = applyInterpretedEventFields(extractedEvent, interpretedFields);
+  if (interpretedFields?.warning) console.log(interpretedFields.warning);
   const speakerPhotos = await gatherSpeakerPhotos({ drive, eventFolder, event, runDir }).catch((error) => {
     console.log(`Speaker photo gathering failed (non-fatal): ${error.message}`);
     return [];
@@ -209,6 +213,7 @@ async function prepare(args) {
       summaryDoc: docFile
     },
     deferredGlueUpReferences: collectDeferredGlueUpReferences(event),
+    ...(interpretedFields ? { interpretedFields } : {}),
     ...(specialTemplate ? { specialTemplate } : {}),
     ...(ticketing ? { ticketing } : {}),
     status: validation.ok ? "prepared" : "needs_attention"

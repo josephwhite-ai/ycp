@@ -26,6 +26,13 @@ export function validateEventRun({ event, artifacts, config, speakerPhotos = [],
     warnings.push("Registration URL is not set yet; it should be filled after the Glue Up event draft is created.");
   }
 
+  if (event.rawSpeakerTimes && !event.speakerSchedule?.length) {
+    errors.push("Speaker speaking times were supplied but could not be interpreted into schedule rows.");
+  }
+  if (event.rawCampaignSubject && !event.campaignSubject) {
+    errors.push("A campaign email subject was supplied but could not be interpreted.");
+  }
+
   if (!templateSelection.selected) {
     errors.push("Could not confidently select an approved Glue Up event template.");
   } else if (!templateSelection.selected.glueUp?.blueprintCode) {

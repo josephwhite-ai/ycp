@@ -47,6 +47,23 @@ export function extractEventFromGoogleDoc(doc) {
       : contentToHtml(bodyParagraphItems, doc),
     rawFields: fields,
     speakers: splitSpeakerEntries(pick(fields, ["speaker (if applicable)", "speakers", "speaker", "presenter", "presenters"]) || ""),
+    rawSpeakerTimes: pick(fields, [
+      "the times at which the different speakers will be speaking",
+      "times at which the different speakers will be speaking",
+      "speaker speaking times",
+      "speaker times",
+      "speaking times",
+      "speaker schedule"
+    ]) || "",
+    rawCampaignSubject: pick(fields, [
+      "the subject line of the campaign email",
+      "subject line of the campaign email",
+      "campaign email subject line",
+      "email campaign subject line",
+      "campaign email subject",
+      "campaign subject line",
+      "email subject line"
+    ]) || "",
     agenda: parseEventAgenda(pick(fields, ["time", "schedule", "agenda", "run of show"]) || ""),
     sessions
   });
