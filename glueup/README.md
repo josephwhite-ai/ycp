@@ -47,6 +47,8 @@ All final public-facing copy is rendered during `prepare` (in `src/generate/even
 
 Invitation campaigns use Glue Up's native `speakers` email block. During `populate-campaigns`, every parsed event speaker is matched to the corresponding Glue Up speaker ID and explicitly selected, allowing Glue Up to render its standard headshot, name, title, and organization presentation.
 
+The shortened campaign summary ends with two compact reminder lines: `📅` for the event date and public time range, and `📍` for the venue and city.
+
 Current approved template taxonomy:
 
 - St Joseph Saturdays: Glue Up Offline blueprint `90664`

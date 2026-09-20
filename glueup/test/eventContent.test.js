@@ -59,6 +59,22 @@ test("renders prepared campaign summary as escaped paragraph HTML", () => {
   );
 });
 
+test("appends concise date, time, and venue lines to the campaign summary", () => {
+  assert.equal(
+    buildCampaignSummaryHtml(
+      {
+        eventDate: "2026-10-15",
+        venue: "Saint Thomas More Chapel & Center at Yale University\n268 Park Street\nNew Haven, CT 06511",
+        rawFields: { time: "6:30 PM - 8:00 PM" }
+      },
+      "A concise invitation."
+    ),
+    "<p>A concise invitation.</p>" +
+      "<p>📅 October 15 | 6:30–8:00 PM</p>" +
+      "<p>📍 Saint Thomas More Chapel &amp; Center at Yale University &ndash; New Haven, CT</p>"
+  );
+});
+
 test("published content includes the prepared campaign summary", () => {
   const rendered = renderPublishedContent({
     event: { description: "A much longer source summary." },
