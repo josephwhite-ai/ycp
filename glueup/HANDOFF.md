@@ -88,6 +88,8 @@ To make the content-review pass cover exactly what gets published, all final
 public-facing strings are rendered in `prepare` and carried in the artifact;
 `populate` is a dumb transfer agent that pushes them verbatim.
 
+- `src/generate/interpretEventFields.js` handles the optional speaker speaking-time and campaign-subject rows before rendering. Gemini normalizes speaker prose into `{ speakerName, startTime, endTime, topic }` rows; the explicit subject is preserved. Results and provenance are stored in `manifest.interpretedFields`, copied onto `event.json`, and drive the page Speaker Schedule and campaign subject.
+
 - `src/generate/eventContent.js` is the single source of truth for rendered
   content (pure functions, no Glue Up/network): `renderPublishedContent({ event, speakers, campaignSummary })`
   returns `{ summaryHtml, pageScheduleHtml, enableSpeakers, campaignSummaryHtml, widgets }`.
@@ -96,7 +98,7 @@ public-facing strings are rendered in `prepare` and carried in the artifact;
 - `prepare` renders from the **normalized** event (`normalizeEventFields` — the
   same normalization `populate` applies), writes `content-render.json` into the
   run, then passes the bundle to `proofreadEventContent` (which strips tags via
-  `htmlToText` and reviews `publishedSummary`/`publishedSchedule`/`publishedCampaignSummary`/`publishedCampaignSpeakers`).
+  `htmlToText` and reviews `publishedSummary`/`publishedSchedule`/`publishedCampaignSummary`; it also reviews the interpreted campaign subject and speaker schedule directly.
 - `populate` loads the bundle via `loadRenderedContent(runDir, event)` and pushes
   it: `populateEventSummaryViaSummaryPage({ summaryHtml })`,
   `populateEventPageContentViaDesignPage({ scheduleHtml, enableSpeakers, widgets })`,

@@ -109,6 +109,29 @@ function publicAgendaRows(event) {
   return selectPublicAgenda(agenda);
 }
 
+function formatSingleTime(time24) {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(time24 || ""));
+  if (!match) return "";
+  const hour = Number(match[1]);
+  return `${hour % 12 || 12}:${match[2]} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+export function buildSpeakerScheduleHtml(speakerSchedule = []) {
+  const rows = (Array.isArray(speakerSchedule) ? speakerSchedule : []).filter((row) => row?.speakerName && row?.startTime);
+  if (!rows.length) return "";
+  const parts = ["<p><strong>Speaker Schedule</strong></p>"];
+  for (const row of rows) {
+    const range = row.endTime
+      ? formatAgendaRange({ startTime: row.startTime, endTime: row.endTime })
+      : formatSingleTime(row.startTime);
+    const detail = row.topic
+      ? `${escapeHtml(row.speakerName)} &ndash; ${escapeHtml(row.topic)}`
+      : escapeHtml(row.speakerName);
+    parts.push(`<p><strong>${escapeHtml(range)}</strong>&nbsp;&ndash;&nbsp;${detail}</p>`);
+  }
+  return parts.join("");
+}
+
 // Block 1 of the public event page: a full "Schedule" section for a real
 // multi-row run-of-show, otherwise the compact emoji where/when block, plus the
 // YCP "Join us" CTA.
@@ -131,6 +154,8 @@ export function buildEventScheduleHtml(event, { includeJoinBlurb = true } = {}) 
     const whereWhen = buildEventWhereWhenHtml(event, rows);
     if (whereWhen) parts.push(whereWhen);
   }
+  const speakerSchedule = buildSpeakerScheduleHtml(event?.speakerSchedule);
+  if (speakerSchedule) parts.push(speakerSchedule);
   if (includeJoinBlurb) parts.push(YCP_JOIN_BLURB);
   return parts.join("");
 }

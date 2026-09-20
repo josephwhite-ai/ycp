@@ -43,3 +43,14 @@ test("finds a Glue Up speaker ID by the exact rendered name", () => {
   assert.equal(findGlueUpSpeakerId(html, "Fr Jeffrey Ellis"), SPEAKER_ID);
   assert.equal(findGlueUpSpeakerId(html, "Another Speaker"), null);
 });
+
+test("uses the interpreted campaign subject instead of the event title", () => {
+  const payloads = buildDefaultCampaignSetupPayloads({
+    eventId: "123",
+    event: { eventName: "Event Title", campaignSubject: "Custom Campaign Subject" },
+    campaign: { title: "Campaign Name" }
+  });
+  const setup = payloads.find(({ action }) => action === "SetupCampaignFormSubmit");
+  assert.equal(setup.data.setup.subject, "Custom Campaign Subject");
+  assert.equal(setup.data.setup.campaignName, "Campaign Name");
+});

@@ -222,7 +222,7 @@ function setupPayloadForCampaign(action, payload, { eventId, event, campaign }) 
     }
   }
   if (data?.setup) {
-    data.setup.subject = event?.eventName || data.setup.subject;
+    data.setup.subject = event?.campaignSubject || event?.eventName || data.setup.subject;
     data.setup.campaignName = campaign?.title || data.setup.campaignName;
   }
   return data;
@@ -263,6 +263,7 @@ export function buildDefaultCampaignSetupPayloads({
 } = {}) {
   if (!eventId) throw new Error("Missing Glue Up event ID.");
   const title = event?.eventName || event?.sourceDocumentTitle || "Event";
+  const subject = event?.campaignSubject || title;
   const speakersBlock = buildNativeSpeakersBlock(speakerIds);
   // Email body blocks. Keep the RSVP action prominent immediately after the
   // organization logo and event details. Prepared campaign copy replaces Glue
@@ -337,7 +338,7 @@ export function buildDefaultCampaignSetupPayloads({
           replyTo: "",
           senderEmail: { code: "64c87d4ce4b050224d5a75b0" },
           preheader: eventPreheader(event),
-          subject: title,
+          subject,
           language: { code: "en" },
           campaignName: campaign?.title || title
         },

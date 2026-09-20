@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildCampaignSummaryHtml,
+  buildSpeakerScheduleHtml,
   centerSummaryHtml,
   eventSummaryHtml,
   preservesBoldText,
@@ -72,6 +73,18 @@ test("appends concise date, time, and venue lines to the campaign summary", () =
     "<p>A concise invitation.</p>" +
       "<p>📅 October 15 | 6:30–8:00 PM</p>" +
       "<p>📍 Saint Thomas More Chapel &amp; Center at Yale University &ndash; New Haven, CT</p>"
+  );
+});
+
+test("renders interpreted speaker times as a page schedule section", () => {
+  assert.equal(
+    buildSpeakerScheduleHtml([
+      { speakerName: "Jane Doe", startTime: "18:30", endTime: "19:00", topic: "Faith at Work" },
+      { speakerName: "John Smith", startTime: "19:00", endTime: "", topic: "" }
+    ]),
+    "<p><strong>Speaker Schedule</strong></p>" +
+      "<p><strong>6:30–7:00 PM</strong>&nbsp;&ndash;&nbsp;Jane Doe &ndash; Faith at Work</p>" +
+      "<p><strong>7:00 PM</strong>&nbsp;&ndash;&nbsp;John Smith</p>"
   );
 });
 

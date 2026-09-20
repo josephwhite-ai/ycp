@@ -35,6 +35,18 @@ test("carries event-sheet bold text through final summary rendering", () => {
                     ]
                   }
                 ]
+              },
+              {
+                tableCells: [
+                  { content: [paragraph({ text: "The times at which the different speakers will be speaking" })] },
+                  { content: [paragraph({ text: "6:30-7:00 PM Jane Doe\n7:00-7:30 PM John Smith" })] }
+                ]
+              },
+              {
+                tableCells: [
+                  { content: [paragraph({ text: "The subject line of the campaign email" })] },
+                  { content: [paragraph({ text: "An Evening of Faith and Work" })] }
+                ]
               }
             ]
           }
@@ -48,6 +60,8 @@ test("carries event-sheet bold text through final summary rendering", () => {
     event.descriptionHtml,
     "<p>Holiness is found <strong>through the challenges of work</strong>.</p>"
   );
+  assert.equal(event.rawSpeakerTimes, "6:30-7:00 PM Jane Doe\n7:00-7:30 PM John Smith");
+  assert.equal(event.rawCampaignSubject, "An Evening of Faith and Work");
   assert.equal(
     renderPublishedContent({ event }).summaryHtml,
     '<p style="text-align: center;">Holiness is found <strong>through the challenges of work</strong>.</p>'

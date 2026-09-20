@@ -11,10 +11,12 @@ export async function proofreadEventContent({ event, speakers = [], artifacts = 
 
   const reviewInput = {
     eventName: event.eventName || "",
+    campaignSubject: event.campaignSubject || "",
     description: event.description || "",
     venue: event.venue || "",
     city: event.city || "",
     speakers: speakers.map(({ fullName, position, company }) => ({ fullName, position, company })),
+    speakerSchedule: event.speakerSchedule || [],
     webpage: String(artifacts.webpage || "").slice(0, 12_000),
     emailWeekBefore: String(artifacts.emails?.weekBefore || "").slice(0, 8_000),
     emailDayBefore: String(artifacts.emails?.dayBefore || "").slice(0, 8_000),

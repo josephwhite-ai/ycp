@@ -31,15 +31,16 @@ The current implementation:
 2. Finds `<Month> <Year> - Event Summary Sheet`.
 3. Reads the Google Doc structure through the Drive/Docs APIs.
 4. Extracts table data into `event.json`.
-5. Selects the approved Glue Up template profile for the event type.
-6. Lists likely photo assets.
-7. Generates local event-template field briefs and campaign-template fill briefs.
-8. Writes a validation report.
-9. Runs a conservative Gemini proofreading pass over public event fields, speaker details, and generated copy.
-9. Ensures a Glue Up event draft exists from the selected approved blueprint or from a reusable template-compatible draft.
-10. Ensures two invitation campaign drafts exist, one for the week-before send and one for the day-before send.
-11. Populates the existing draft and campaign records for the current month.
-12. Schedules campaign emails after manual review and manual publish.
+5. Interprets optional speaker speaking times with Gemini and preserves an optional campaign email subject, recording both in `manifest.json`.
+6. Selects the approved Glue Up template profile for the event type.
+7. Lists likely photo assets.
+8. Generates local event-template field briefs and campaign-template fill briefs.
+9. Writes a validation report.
+10. Runs a conservative Gemini proofreading pass over public event fields, speaker details, and generated copy.
+11. Ensures a Glue Up event draft exists from the selected approved blueprint or from a reusable template-compatible draft.
+12. Ensures two invitation campaign drafts exist, one for the week-before send and one for the day-before send.
+13. Populates the existing draft and campaign records for the current month.
+14. Schedules campaign emails after manual review and manual publish.
 
 The agent should not design new event pages or email campaigns from scratch. Glue Up is treated as the source of approved event and campaign templates; this repo prepares structured content, selects the right template, fills fields, and verifies the result.
 
@@ -48,6 +49,8 @@ All final public-facing copy is rendered during `prepare` (in `src/generate/even
 Invitation campaigns use Glue Up's native `speakers` email block. During `populate-campaigns`, every parsed event speaker is matched to the corresponding Glue Up speaker ID and explicitly selected, allowing Glue Up to render its standard headshot, name, title, and organization presentation.
 
 The shortened campaign summary ends with two compact reminder lines: `📅` for the event date and public time range, and `📍` for the venue and city.
+
+Two optional summary-sheet fields receive special handling during `prepare`: `The times at which the different speakers will be speaking` is normalized by Gemini into structured `speakerSchedule` rows and rendered as a Speaker Schedule on the event page; `The subject line of the campaign email` is preserved verbatim (apart from whitespace normalization) and used as the subject for both invitation campaigns. The interpreted values, source text, and interpretation methods are stored under `manifest.interpretedFields`.
 
 Current approved template taxonomy:
 
