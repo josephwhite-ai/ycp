@@ -26,7 +26,7 @@ import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { proofreadEventContent } from "./validate/contentProofreader.js";
-import { selectEventTemplate, selectPublicEventTag } from "./templates/eventTypes.js";
+import { selectEventTemplate, selectPublicEventTag, selectedPublicTagCodes } from "./templates/eventTypes.js";
 import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
 import {
   addCampaign,
@@ -2060,8 +2060,9 @@ async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, 
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator('input[name="title"]').first().waitFor({ state: "visible", timeout: 60_000 });
     if (publicTag) {
-      const selectedTags = await page.locator('.eventTagHolder .MultiSelectTool input[type="hidden"]').inputValue();
-      if (!JSON.parse(selectedTags || "[]").some(tag => String(tag.code) === publicTag.code)) {
+      const savedResponse = await context.request.get(page.url());
+      const selectedTags = selectedPublicTagCodes(await savedResponse.text());
+      if (!savedResponse.ok() || !selectedTags.includes(publicTag.code)) {
         throw new Error(`Glue Up did not persist public event tag ${publicTag.label}.`);
       }
     }
