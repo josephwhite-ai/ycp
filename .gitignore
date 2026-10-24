@@ -15,3 +15,6 @@ whatsapp/downloaded_images/
 whatsapp/debug_output/
 whatsapp/logs/
 whatsapp/*.png
+
+# Root-level Glue Up browser profile (contains local authentication data).
+/.glueup-session/
