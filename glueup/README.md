@@ -70,6 +70,8 @@ The event summary sheet commonly uses these abbreviations:
 
 Events default to public unless the source data explicitly says members-only/private.
 
+Anniversary events reuse the public offline layout (`90663`) but carry the **Other Events** public tag. Page layout and event classification are independent: `populate` sets and verifies the public tag rather than inheriting the blueprint's tag. Explicit event types take priority over the title and description; unknown explicit types require review instead of being silently classified from reception wording. When no explicit type is supplied, the event title takes priority over description hints.
+
 ## Glue Up draft creation
 
 Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls when you start from `https://ycp.glueup.com/events/draft`.

@@ -1,6 +1,17 @@
 export const EVENT_TYPES = [
   {
+    key: "anniversary",
+    label: "Anniversary Mass and Reception",
+    hints: ["anniversary"],
+    publicTag: { code: "3039", label: "Other Events" },
+    // Reuse the public offline layout; classification is set independently.
+    variants: [{ key: "public", label: "Open to the Public", hints: [],
+      glueUp: { eventType: "Offline", blueprintCode: "90663" } }],
+    requiredFields: ["eventName", "eventDate", "venue"]
+  },
+  {
     key: "st-joseph-saturdays",
+    publicTag: { code: "3040", label: "St. Joseph Saturdays" },
     label: "St Joseph Saturdays",
     hints: ["sjs", "st joseph saturday", "st. joseph saturday", "saint joseph saturday"],
     variants: [
@@ -18,6 +29,7 @@ export const EVENT_TYPES = [
   },
   {
     key: "executive-speaker-series",
+    publicTag: { code: "3037", label: "Executive Speaker Series" },
     label: "Executive Speaker Series",
     hints: ["ess", "executive speaker series", "speaker series", "executive speaker"],
     variants: [
@@ -35,6 +47,7 @@ export const EVENT_TYPES = [
   },
   {
     key: "executive-panel-discussion",
+    publicTag: { code: "3036", label: "Executive Panel Discussions" },
     label: "Executive Panel Discussion",
     hints: ["epd", "executive panel discussion", "panel discussion", "executive panel", "panel"],
     variants: [
@@ -61,6 +74,7 @@ export const EVENT_TYPES = [
   },
   {
     key: "networking-happy-hour",
+    publicTag: { code: "3038", label: "Networking Happy Hours" },
     label: "Networking Happy Hour",
     hints: ["nhh", "networking happy hour", "happy hour", "networking"],
     variants: [
@@ -105,18 +119,23 @@ export function selectEventTemplate(event) {
     ])
   ]);
 
+  const explicit = normalizeSearchText([explicitType]);
+  const matchesType = (type, text) => [type.label, ...type.hints].some(hint =>
+    (` ${text} `).includes(` ${normalizeSearchText([hint])} `)
+  );
+  const explicitTypes = EVENT_TYPES.filter(type => matchesType(type, explicit));
+  const titleTypes = EVENT_TYPES.filter(type => matchesType(type, normalizeSearchText([event.eventName])));
+  // Unknown explicit types must be reviewed, never inferred from incidental copy.
+  const preferredTypes = explicit ? explicitTypes : titleTypes;
   const scoredTypes = EVENT_TYPES.map((type) => {
-    const matches = type.hints.filter((hint) => haystack.includes(hint));
-    const normalizedExplicitType = normalizeSearchText([explicitType]);
-    const explicitMatch =
-      normalizedExplicitType &&
-      (normalizedExplicitType.includes(normalize(type.label)) ||
-        type.hints.includes(normalizedExplicitType))
-        ? 2
-        : 0;
+    const matches = [...new Set([type.label, ...type.hints])].filter(hint =>
+      (` ${haystack} `).includes(` ${normalizeSearchText([hint])} `)
+    );
     return {
       ...type,
-      score: matches.length + explicitMatch,
+      score: preferredTypes.length
+        ? (preferredTypes.includes(type) ? 100 + matches.length : 0)
+        : explicit ? 0 : matches.length,
       matchedHints: matches
     };
   }).sort((a, b) => b.score - a.score);
@@ -135,6 +154,7 @@ export function selectEventTemplate(event) {
             variantKey: selectedVariant.key,
             variantLabel: selectedVariant.label,
             glueUp: selectedGlueUp,
+            publicTag: selectedType.publicTag,
             requiredFields: selectedType.requiredFields
           }
         : null,
@@ -189,4 +209,9 @@ function normalizeSearchText(values) {
     .replace(/\bN\.?H\.?H\.?\b/gi, " NHH ")
     .replace(/\bS\.?J\.?S\.?\b/gi, " SJS ");
   return normalize(words);
+}
+
+// Used during population too, so older prepared artifacts receive corrected tags.
+export function selectPublicEventTag(event) {
+  return selectEventTemplate(event).selected?.publicTag || null;
 }
