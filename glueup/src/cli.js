@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { normalizeEventVenue } from "./extract/venue.js";
 import { launchGlueUpContext } from "./glueup/browserSession.js";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -2742,28 +2743,6 @@ function extractGlueUpCsrfToken(html) {
     html.match(/<meta[^>]+name=["']csrf-token["'][^>]*\scontent=["']([^"']+)["']/i) ||
     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*\s(?:id|name)=["']csrf-token["']/i);
   return match?.[1] || "";
-}
-
-function normalizeEventVenue(event) {
-  const full = String(event?.venue || "").replace(/\r\n/g, "\n").trim();
-  const lines = full
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const name = lines[0] || "";
-  const addressLines = lines.slice(1);
-  const city = String(event?.city || inferCityFromAddressLines(addressLines) || "").trim();
-  const address = addressLines[0] || "";
-  const search = [name, ...addressLines, city].filter(Boolean).join(" ");
-  return { full, name, address, city, search };
-}
-
-function inferCityFromAddressLines(lines) {
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const match = /^([^,\n]+),?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/.exec(lines[i]);
-    if (match) return match[1].trim();
-  }
-  return "";
 }
 
 async function searchVenueGeo({ eventId, search, cookie, csrfToken, orgId }) {
