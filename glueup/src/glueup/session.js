@@ -1,3 +1,4 @@
+import { launchGlueUpContext, saveSessionCookies } from "./browserSession.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -13,9 +14,11 @@ const AUTH_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 const CI_AUTH_WAIT_TIMEOUT_MS = 90 * 1000;
 
 // Single entry point for the CLI: env secrets > a still-valid saved session
-// (probed headlessly, which Cloudflare allows) > a headed login (which Cloudflare
-// requires a human to pass). The headed browser only opens when there is no
+// (probed headlessly) > a headed login (which may require a human to pass
+// Cloudflare). The headed browser only opens when there is no
 // usable session, so the happy path never prompts.
+const authenticatedSessions = new Map();
+
 export async function ensureGlueUpAuth(options = {}) {
   const cookie = process.env.GLUEUP_COOKIE;
   const csrfToken = process.env.GLUEUP_CSRF_TOKEN;
@@ -30,10 +33,15 @@ export async function ensureGlueUpAuth(options = {}) {
     );
   }
 
+  const key = resolve(options.sessionDir || process.env.GLUEUP_SESSION_DIR || DEFAULT_SESSION_DIR);
+  if (authenticatedSessions.has(key)) return authenticatedSessions.get(key);
+
   if (sessionDirExists(options.sessionDir)) {
     try {
       const session = await getGlueUpSession({ ...options, headless: true, interactive: false });
-      return { ...session, source: "session" };
+      const auth = { ...session, source: "session" };
+      authenticatedSessions.set(key, auth);
+      return auth;
     } catch (error) {
       if (error?.code !== "GLUEUP_LOGIN_REQUIRED") throw error;
       console.log("Saved Glue Up session is missing or expired; opening a browser to log in.");
@@ -41,7 +49,9 @@ export async function ensureGlueUpAuth(options = {}) {
   }
 
   const session = await loginGlueUp({ ...options, headless: false });
-  return { ...session, source: "login" };
+  const auth = { ...session, source: "login" };
+  authenticatedSessions.set(key, auth);
+  return auth;
 }
 
 export async function loginGlueUp(options = {}) {
@@ -55,6 +65,7 @@ export async function loginGlueUp(options = {}) {
     await maybeSubmitCredentials(session.page, options);
     await waitForAuthenticatedDraftPage(session.page, options);
     const auth = await extractSession(session.context, session.page);
+    if (!options.ephemeral && !process.env.CI) await saveSessionCookies(session.context, options.sessionDir);
     console.log("Glue Up session is ready.");
     if (auth.csrfToken) {
       console.log("CSRF token captured.");
@@ -77,7 +88,9 @@ export async function getGlueUpSession(options = {}) {
     await openDraftWorkspace(session.page);
     await maybeSubmitCredentials(session.page, options);
     await waitForAuthenticatedDraftPage(session.page, options);
-    return await extractSession(session.context, session.page);
+    const auth = await extractSession(session.context, session.page);
+    if (!options.ephemeral && !process.env.CI) await saveSessionCookies(session.context, options.sessionDir);
+    return auth;
   } catch (error) {
     if (error?.code !== "GLUEUP_LOGIN_REQUIRED") {
       await captureFailureArtifacts(session.page, error);
@@ -110,7 +123,7 @@ async function withGlueUpBrowser(options = {}) {
   }
 
   const sessionDir = resolve(options.sessionDir || process.env.GLUEUP_SESSION_DIR || DEFAULT_SESSION_DIR);
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });

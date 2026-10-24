@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { launchGlueUpContext } from "./glueup/browserSession.js";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -1979,7 +1980,7 @@ async function markIgnore(args) {
 async function markEventIgnoreViaSettingsPage({ eventId, title, headless }) {
   const { chromium } = await import("playwright");
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
@@ -2015,7 +2016,7 @@ async function markEventIgnoreViaSettingsPage({ eventId, title, headless }) {
 async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, headless }) {
   const { chromium } = await import("playwright");
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
@@ -2139,7 +2140,7 @@ async function populateEventVenueViaAjax({ eventId, event, templateGeo = null, c
 async function inspectGlueUpTicketInventory({ eventId, headless }) {
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
   const { chromium } = await import("playwright");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
@@ -2886,7 +2887,7 @@ async function populateEventSummaryViaSummaryPage({ eventId, summaryHtml, headle
 
   const { chromium } = await import("playwright");
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
