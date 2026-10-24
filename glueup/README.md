@@ -70,6 +70,8 @@ The event summary sheet commonly uses these abbreviations:
 
 Events default to public unless the source data explicitly says members-only/private.
 
+Anniversary events reuse the public offline layout (`90663`) but carry the **Other Events** public tag. Page layout and event classification are independent: `populate` sets and verifies the public tag rather than inheriting the blueprint's tag. Explicit event types take priority over the title and description; unknown explicit types require review instead of being silently classified from reception wording. When no explicit type is supplied, the event title takes priority over description hints.
+
 ## Glue Up draft creation
 
 Glue Up draft creation uses the same internal AJAX endpoint the admin UI calls when you start from `https://ycp.glueup.com/events/draft`.
@@ -127,6 +129,8 @@ npm run glueup-login
 ```
 
 Glue Up's login sits behind Cloudflare bot management, so headless/CI login is blocked — `glueup-login` must run with a visible browser (the default). There is no CI login workflow, and Glue Up cookies/tokens should not be stored as repository secrets for this public repo. The normal path is to reuse the gitignored local `.glueup-session/` browser profile, refreshing it with `npm run glueup-login` when it expires.
+
+Session cookies are also saved in `.glueup-session/session-cookies.json` with owner-only file permissions and restored into each browser context. This preserves login cookies that Chromium otherwise drops between steps. Each command reuses its authenticated session in memory; separate commands probe the restored session and open login only when necessary. The cookie snapshot is local authentication data and is gitignored. Both the root and `glueup/` browser profiles must stay out of commits.
 
 Session cookies and CSRF tokens are intentionally not stored in source files. They expire and should be treated like passwords.
 
