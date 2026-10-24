@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { normalizeEventVenue } from "./extract/venue.js";
+import { launchGlueUpContext } from "./glueup/browserSession.js";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -24,7 +26,7 @@ import { selectBannerCandidate } from "./generate/bannerSelector.js";
 import { findSpeakerHeadshot } from "./generate/speakerImageSearch.js";
 import { buildCampaignSchedule, validateEventRun, validationReport } from "./validate/validators.js";
 import { proofreadEventContent } from "./validate/contentProofreader.js";
-import { selectEventTemplate } from "./templates/eventTypes.js";
+import { selectEventTemplate, selectPublicEventTag } from "./templates/eventTypes.js";
 import { assertNoAppError, buildDraftCreateRequest, createDraftFromBlueprint, parseEventTimes } from "./glueup/draftCreate.js";
 import {
   addCampaign,
@@ -1979,7 +1981,7 @@ async function markIgnore(args) {
 async function markEventIgnoreViaSettingsPage({ eventId, title, headless }) {
   const { chromium } = await import("playwright");
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
@@ -2015,7 +2017,7 @@ async function markEventIgnoreViaSettingsPage({ eventId, title, headless }) {
 async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, headless }) {
   const { chromium } = await import("playwright");
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
@@ -2035,6 +2037,14 @@ async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, 
     await fillFirstVisible(page, ['input[name="endTime"]', 'input[name="end_time"]'], times.endTime);
     await fillFirstVisible(page, ['input[name="venue.timezone"]', 'input[name="timezone"]'], timezone);
 
+    const publicTag = selectPublicEventTag(event);
+    if (publicTag) {
+      await page.locator('.eventTagHolder .MultiSelectTool input[type="hidden"]').evaluate((input, tag) => {
+        input.value = JSON.stringify([{ code: tag.code }]);
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }, publicTag);
+    }
+
     const responsePromise = page
       .waitForResponse((response) =>
         response.url().includes(`/events/${eventId}/setup/settings/general/ajax`) &&
@@ -2047,6 +2057,14 @@ async function populateEventSettingsViaSettingsPage({ eventId, event, timezone, 
       throw new Error(`Glue Up settings save failed ${response.status()}.`);
     }
     await page.waitForTimeout(1_000);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator('input[name="title"]').first().waitFor({ state: "visible", timeout: 60_000 });
+    if (publicTag) {
+      const selectedTags = await page.locator('.eventTagHolder .MultiSelectTool input[type="hidden"]').inputValue();
+      if (!JSON.parse(selectedTags || "[]").some(tag => String(tag.code) === publicTag.code)) {
+        throw new Error(`Glue Up did not persist public event tag ${publicTag.label}.`);
+      }
+    }
     const currentTitle = await page.locator('input[name="title"]').first().inputValue();
     if (currentTitle !== title) {
       throw new Error(`Glue Up settings save did not persist the event title; current title is "${currentTitle}".`);
@@ -2139,7 +2157,7 @@ async function populateEventVenueViaAjax({ eventId, event, templateGeo = null, c
 async function inspectGlueUpTicketInventory({ eventId, headless }) {
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
   const { chromium } = await import("playwright");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
@@ -2727,28 +2745,6 @@ function extractGlueUpCsrfToken(html) {
   return match?.[1] || "";
 }
 
-function normalizeEventVenue(event) {
-  const full = String(event?.venue || "").replace(/\r\n/g, "\n").trim();
-  const lines = full
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const name = lines[0] || "";
-  const addressLines = lines.slice(1);
-  const city = String(event?.city || inferCityFromAddressLines(addressLines) || "").trim();
-  const address = addressLines[0] || "";
-  const search = [name, ...addressLines, city].filter(Boolean).join(" ");
-  return { full, name, address, city, search };
-}
-
-function inferCityFromAddressLines(lines) {
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const match = /^([^,\n]+),?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/.exec(lines[i]);
-    if (match) return match[1].trim();
-  }
-  return "";
-}
-
 async function searchVenueGeo({ eventId, search, cookie, csrfToken, orgId }) {
   const response = await postGlueUpAjax({
     path: "/map/ajax",
@@ -2886,7 +2882,7 @@ async function populateEventSummaryViaSummaryPage({ eventId, summaryHtml, headle
 
   const { chromium } = await import("playwright");
   const sessionDir = resolve(process.env.GLUEUP_SESSION_DIR || ".glueup-session");
-  const context = await chromium.launchPersistentContext(sessionDir, {
+  const context = await launchGlueUpContext(chromium, sessionDir, {
     headless,
     viewport: { width: 1440, height: 1000 }
   });
