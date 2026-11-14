@@ -6,10 +6,15 @@
   "scripts": {
     "snapshot": "node scripts/snapshot.mjs",
     "embed": "node scripts/use-embed.mjs",
+    "sync": "node scripts/sync-leaders.mjs",
     "dev": "node scripts/serve.mjs",
     "test": "node --test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "heic-convert": "^2.1.0",
+    "sharp": "^0.35.5"
   }
 }
