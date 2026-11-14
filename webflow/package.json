@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "snapshot": "node scripts/snapshot.mjs",
+    "embed": "node scripts/use-embed.mjs",
     "dev": "node scripts/serve.mjs",
     "test": "node --test"
   },
