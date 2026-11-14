@@ -215,3 +215,13 @@ function normalizeSearchText(values) {
 export function selectPublicEventTag(event) {
   return selectEventTemplate(event).selected?.publicTag || null;
 }
+
+// Read the server-rendered selection: MultiSelectTool leaves its hidden input
+// empty until submit, then removes selected options from the live select.
+export function selectedPublicTagCodes(html) {
+  const select = html.match(/<select\b[^>]*\bname=["']eventTag["'][^>]*>([\s\S]*?)<\/select>/i)?.[1] || "";
+  return [...select.matchAll(/<option\b([^>]*)>/gi)]
+    .filter(([, attrs]) => /(?:^|\s)selected(?:\s|=|$)/i.test(attrs))
+    .map(([, attrs]) => attrs.match(/\bvalue=["']([^"']*)["']/i)?.[1])
+    .filter(Boolean);
+}
