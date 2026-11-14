@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { selectEventTemplate, selectPublicEventTag } from "../src/templates/eventTypes.js";
+import { selectEventTemplate, selectPublicEventTag, selectedPublicTagCodes } from "../src/templates/eventTypes.js";
 
 test("anniversary classification survives networking wording in the reception description", () => {
   const event = { eventType: "Anniversary Party", eventName: "3rd Year Anniversary Mass and Reception", description: "Reception & Networking Happy Hour" };
@@ -31,4 +31,14 @@ test("abbreviations match whole words; public and members-only variants still wo
 test("event title takes priority when no explicit type is provided", () => {
   assert.equal(selectPublicEventTag({ eventName: "3rd Year Anniversary Mass and Reception", description: "Reception and Networking Happy Hour" }).code, "3039");
   assert.equal(selectEventTemplate({ eventName: "St Joseph Saturdays" }).selected.key, "st-joseph-saturdays");
+});
+
+test("reads persisted tags from selected server-rendered options, not the empty hidden input", () => {
+  const html = `<select name="other"><option selected value="999">Other</option></select>
+    <input type="hidden" name="eventTag" />
+    <select name="eventTag"><option selected value="">Choose</option>
+    <option value="3038" selected>Networking</option><option value="3039">Other</option></select>`;
+  assert.deepEqual(selectedPublicTagCodes(html), ["3038"]);
+  assert.deepEqual(selectedPublicTagCodes(`<select name='eventTag'><option selected='selected' value='3039'>Other</option></select>`), ["3039"]);
+  assert.deepEqual(selectedPublicTagCodes("Login page"), []);
 });
