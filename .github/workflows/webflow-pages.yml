@@ -1,49 +1,95 @@
 name: Publish Webflow leaders embed
 
-# Publishes the leaders data and embed script to GitHub Pages:
+# Publishes the leaders data, photos and embed script to GitHub Pages:
 #   https://josephwhite-ai.github.io/ycp/webflow/leaders.json
 #   https://josephwhite-ai.github.io/ycp/webflow/leaders-embed.js
+#
+# The leaders come from the Google Sheet in the LEADERS_SHEET_ID repository
+# variable. Until that is set, webflow/api/leaders.json is published instead.
 
 on:
   push:
     branches: [main]
     paths:
-      - webflow/api/**
-      - webflow/component/**
+      - webflow/**
+      - "!webflow/README.md"
       - .github/workflows/webflow-pages.yml
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+  schedule:
+    - cron: "23 * * * *" # hourly; only deploys when the sheet changed
+  workflow_dispatch: # the "Publish leaders now" menu in the sheet
 
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.data.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      # The tests check that leaders.json is valid for the component, so bad data is not published.
-      - name: Test
+          cache: npm
+          cache-dependency-path: webflow/package-lock.json
+      - run: npm ci
         working-directory: webflow
+      - name: Test
         run: npm test
-      - name: Assemble site
+        working-directory: webflow
+
+      - name: Sync leaders from the Google Sheet
+        id: data
+        working-directory: webflow
+        env:
+          LEADERS_SHEET_ID: ${{ vars.LEADERS_SHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          LIVE_URL: https://josephwhite-ai.github.io/ycp/webflow/leaders.json
+          # A push can change the component, so it always deploys. Other runs
+          # deploy only when the sheet differs from what is live.
+          SKIP_IF_LIVE: ${{ github.event_name != 'push' }}
         run: |
-          mkdir -p _site/webflow
-          cp webflow/api/leaders.json webflow/component/leaders-embed.js _site/webflow/
-      - uses: actions/configure-pages@v6
+          OUT="$GITHUB_WORKSPACE/_site/webflow"
+          mkdir -p "$OUT"
+          if [ -z "$LEADERS_SHEET_ID" ]; then
+            echo "LEADERS_SHEET_ID is not set; publishing webflow/api/leaders.json."
+            cp api/leaders.json "$OUT/"
+            echo "changed=${{ github.event_name == 'push' }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$GOOGLE_CREDENTIALS_JSON" ]; then
+            echo "The GOOGLE_SERVICE_ACCOUNT_JSON secret is missing."
+            exit 1
+          fi
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/google-service-account.json"
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > "$GOOGLE_APPLICATION_CREDENTIALS"
+          ARGS=(--out "$OUT")
+          if [ "$SKIP_IF_LIVE" = "true" ]; then ARGS+=(--skip-if-live "$LIVE_URL"); fi
+          node scripts/sync-leaders.mjs "${ARGS[@]}"
+
+      - name: Add the embed script
+        if: steps.data.outputs.changed == 'true'
+        run: cp webflow/component/leaders-embed.js _site/webflow/
       - uses: actions/upload-pages-artifact@v5
+        if: steps.data.outputs.changed == 'true'
         with:
           path: _site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v6
       - id: deployment
         uses: actions/deploy-pages@v5

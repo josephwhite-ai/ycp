@@ -45,12 +45,13 @@ This swaps the two CMS leader lists in `site/index.html` for the embed, pointing
 
 ### Hosting
 
-`.github/workflows/webflow-pages.yml` publishes `api/leaders.json` and `component/leaders-embed.js` to GitHub Pages whenever either changes on `main`, after running the tests:
+`.github/workflows/webflow-pages.yml` publishes the leaders data, their photos and the embed script to GitHub Pages:
 
 - https://josephwhite-ai.github.io/ycp/webflow/leaders.json
 - https://josephwhite-ai.github.io/ycp/webflow/leaders-embed.js
+- https://josephwhite-ai.github.io/ycp/webflow/photos/…
 
-To change a leader, edit `api/leaders.json` and merge to `main`. GitHub Pages lets browsers cache files for about 10 minutes, so a change can take that long to show. GitHub Pages allows requests from any site, so no CORS setup is needed.
+It runs on every push to `main` that touches `webflow/`, every hour, and on demand. The leaders come from a Google Sheet (below). Until the sheet is connected, it publishes `api/leaders.json` instead. GitHub Pages allows requests from any site, so no CORS setup is needed.
 
 To test the local copy against the hosted files, take a fresh snapshot and run:
 
@@ -58,15 +59,50 @@ To test the local copy against the hosted files, take a fresh snapshot and run:
 npm run embed -- --data-url https://josephwhite-ai.github.io/ycp/webflow/leaders.json --script-url https://josephwhite-ai.github.io/ycp/webflow/leaders-embed.js
 ```
 
+## Editing leaders in the Google Sheet
+
+Editors change leaders in a Google Sheet; nobody needs to touch this repository.
+
+### For editors
+
+- **One row per leader.** The columns are Name, Title, Group and Photo. Extra columns (for notes) are ignored.
+- **Group** is `Leadership` or `Board & Chaplaincy`, matching the two tabs on the chapter page.
+- **Order:** leaders appear in the same order as the rows. Move a row to move a card. Blank rows are skipped.
+- **Photo:** upload the photo to the shared leaders photos folder in Google Drive, then right-click it, choose Share > Copy link, and paste the link into the Photo cell. A web address of an image also works. Do not insert the image into the cell itself; the sync can't see it. Any size and JPEG, PNG or iPhone (HEIC) photos are fine; they are shrunk automatically. Square, face-centred photos look best in the circles. Leave the cell empty for no photo.
+- **Publishing:** changes go live within the hour. To publish straight away, use the sheet's Website > Publish leaders now menu. Either way, visitors' browsers may show the old list for up to 10 more minutes.
+- **Mistakes are safe:** if a row has a problem (an unknown group, a photo that can't be opened), nothing is published and the website keeps showing the last good version. Website > Check the last publish says whether it failed and links to the list of rows to fix.
+
+### How it works
+
+`scripts/sync-leaders.mjs` (`npm run sync`) exports the sheet's first tab as CSV through the Google Drive API, checks every row, downloads each photo, resizes it to a 600px JPEG and writes `leaders.json` plus `photos/`. Photo file names include a hash of the photo, so replacing a photo changes `leaders.json` and browsers never show a stale picture.
+
+The hourly run compares the sheet with the published `leaders.json` and stops before downloading photos when nothing changed, so it only deploys after real edits.
+
+### One-time setup
+
+1. **Create the sheet.** Make a new Google Sheet and use File > Import > Upload with [sheet/leaders-template.csv](sheet/leaders-template.csv), choosing "Replace current sheet". It holds the 20 current leaders. Keep the leaders on the first tab.
+2. **Make a photos folder** in Google Drive for headshots.
+3. **Share both** (Viewer is enough) with the service account in the repository's `GOOGLE_SERVICE_ACCOUNT_JSON` secret, the same one the Glue Up workflow uses. Its address is the `client_email` in that key file. Share the sheet and folder with editors as Editor.
+4. **Connect the sheet:** in GitHub, Settings > Secrets and variables > Actions > Variables, add `LEADERS_SHEET_ID` with the sheet's ID, the long part of its address between `/d/` and `/edit`. The next hourly run publishes from the sheet; to publish straight away, run the "Publish Webflow leaders embed" workflow from the Actions tab.
+5. **Optional Publish menu:** in the sheet, open Extensions > Apps Script, paste [sheet/Publish.gs](sheet/Publish.gs) and save. Create a fine-grained GitHub token limited to this repository with only "Actions: Read and write", and add it in Apps Script under Project Settings > Script properties as `GITHUB_TOKEN`. Reload the sheet to see the Website menu. The token belongs to whoever creates it; anyone who can edit the script can see it, so share the sheet's script access carefully.
+
+To run the sync on your machine:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json npm run sync -- --sheet <sheet id> --out /tmp/leaders
+```
+
+The sheet is now the source of truth. `api/leaders.json` stays in the repository as sample data for the local copy and as the fallback before the sheet is connected; it is not updated from the sheet.
+
 ### Before handing it over
 
 - The embed snippet hard-codes the GitHub Pages address. If the files move to another host later, the admin has to update the snippet.
-- The leaders data still points at headshots on the national site's Webflow CDN. Moving the photos to your own host removes that dependency.
 - Webflow's Code Embed element needs a paid site or workspace plan, which the national site has. A free staging site may not allow it; check before relying on one.
+- Failed hourly syncs email whoever last changed the workflow's schedule in GitHub, not the sheet's editors. Editors see failures only through Website > Check the last publish.
 
 ## Local page copy
 
-Requires Node 20+. There are no dependencies to install.
+Requires Node 20+. Run `npm install` once.
 
 ```bash
 npm run snapshot
