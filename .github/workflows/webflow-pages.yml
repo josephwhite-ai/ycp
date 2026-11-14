@@ -1,0 +1,49 @@
+name: Publish Webflow leaders embed
+
+# Publishes the leaders data and embed script to GitHub Pages:
+#   https://josephwhite-ai.github.io/ycp/webflow/leaders.json
+#   https://josephwhite-ai.github.io/ycp/webflow/leaders-embed.js
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - webflow/api/**
+      - webflow/component/**
+      - .github/workflows/webflow-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      # The tests check that leaders.json is valid for the component, so bad data is not published.
+      - name: Test
+        working-directory: webflow
+        run: npm test
+      - name: Assemble site
+        run: |
+          mkdir -p _site/webflow
+          cp webflow/api/leaders.json webflow/component/leaders-embed.js _site/webflow/
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5

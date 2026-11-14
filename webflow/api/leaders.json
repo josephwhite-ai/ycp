@@ -1,0 +1,125 @@
+{
+  "chapter": "central-connecticut",
+  "leaders": [
+    {
+      "name": "Natasha Hagen",
+      "title": "President",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/658dfceea7939e42518d973b_17-hagen-natasha%20(1).jpg"
+    },
+    {
+      "name": "Glenn Ryan Tapawan",
+      "title": "VP and Co-Director of Marketing",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/658dfb9f71ea840e390adf94_Glen%20Ryan.jpg"
+    },
+    {
+      "name": "Michelle Guerrero-Paquette",
+      "title": "VP and Director of Membership",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/658dfbf6f26933c4870ed51f_Michelle%20Paquette%20(1).jpg"
+    },
+    {
+      "name": "Kimberly Muscat",
+      "title": "Director of Finance",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/658dfc2cf628421e03260828_Kimberly%20Muscat.jpeg"
+    },
+    {
+      "name": "Joe Schifferdecker",
+      "title": "Co-Director of Marketing",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/68efffae3d3990d310596022_Joe%20Schifferdecker.jpeg"
+    },
+    {
+      "name": "Joseph Luchene",
+      "title": "Assistant Director of Membership",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/68872c672a63a1885056c817_Joseph%20Luchene%20(1).jpg"
+    },
+    {
+      "name": "John Eno",
+      "title": "Director of Operations",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/68872d59aa73283c09df0988_Eno%20Edited%20(1).jpg"
+    },
+    {
+      "name": "Alan Harrington",
+      "title": "Director of Outreach",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/68acde8e459c4533e7d6fdd3_alan%20harrington.jpg"
+    },
+    {
+      "name": "Joseph White",
+      "title": "Director of Technology",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/68f0007d8e85c697aae52f02_JosephFerreiraWhitePassportPhoto.jpg"
+    },
+    {
+      "name": "Austin Hollis",
+      "title": "Chapter Leader at Large",
+      "group": "leadership",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/678e9d4ce297a64013651b30_20220525_192055%20(1).jpg"
+    },
+    {
+      "name": "Justin Murphy",
+      "title": "Board Chair - Retired, JP Morgan Asset Management",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887db30cbc040107d8af621_Justin%20Murphy.png"
+    },
+    {
+      "name": "Fr. Robert Turner",
+      "title": "Chapter Chaplain - Pastor of St. Ambrose Parish in North Branford and Northford",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887dcce7cf1de95c4f2865b_rev%20robert.png"
+    },
+    {
+      "name": "Rev. Marcin Pluciennik",
+      "title": "Assistant Chaplain - Pastor of St. Teresa of Calcutta Parish in Manchester, CT",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887dc5fa8078bdc9a22bc59_rev%20marcin.png"
+    },
+    {
+      "name": "Sr. Faith Marie Woolsley, FSE",
+      "title": "Assistant Chaplain - Physical Therapist for Franciscan Home Care and Hospice Care and Postulant Directress for her community",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887de077a4cb375d96233a3_sister%20faith.png"
+    },
+    {
+      "name": "Sr. Carolyn Martin, LSP",
+      "title": "Assistant Chaplain - Coordinator of Senior Living Services, Young Adult Engagement, and Vocations Ministry at St. Joseph’s Residence in Enfield",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887dd4ac1885285223a6929_sister%20carolyn.png"
+    },
+    {
+      "name": "Sr. Christine Hoffner, ASCJ",
+      "title": "Assistant Chaplain - Provincial Treasurer for her community in Hamden",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887ddae3996fe391d680efb_sister%20christine.png"
+    },
+    {
+      "name": "Aaron Joseph",
+      "title": "Assistant Chaplain",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/694ad2f0d7d0cf30e368a13e_ycpdoveplaceholder.jpg"
+    },
+    {
+      "name": "Omar Kouatly",
+      "title": "Board Member - Vice President of Technology for Communio.org",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6887dbe9df7f92bb8c48cd72_Omar.png"
+    },
+    {
+      "name": "Harry Garafalo",
+      "title": "Board Member",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/65836b33e57dec31e4300e42_ycpdoveplaceholder.jpg"
+    },
+    {
+      "name": "Jeff Roberts",
+      "title": "Board Member",
+      "group": "board",
+      "image": "https://cdn.prod.website-files.com/6363ec521262866fbfc333c0/6848529c2904684734b4a9d0_ycpdoveplaceholder.jpg"
+    }
+  ]
+}
