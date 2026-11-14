@@ -6,6 +6,7 @@ This repository contains automation projects for YCP workflows.
 
 - bulletins/: existing bulletin PDF event-extraction scripts.
 - glueup/: Glue Up event-page and campaign preparation agent.
+- webflow/: work on the Central Connecticut chapter page of the national Webflow site.
 - whatsapp/: WhatsApp Web media scraper and login helpers.
 
 ## Workflows
@@ -13,6 +14,7 @@ This repository contains automation projects for YCP workflows.
 - .github/workflows/ocr-pdf-gemini.yml: runs the Gemini bulletin extractor.
 - .github/workflows/ocr-pdf-claude.yml: runs the Claude bulletin extractor.
 - .github/workflows/glueup-monthly-prepare.yml: prepares monthly Glue Up event artifacts from Google Drive.
+- .github/workflows/webflow-pages.yml: publishes the Webflow leaders data and embed script to GitHub Pages.
 
 ## Secrets
 
