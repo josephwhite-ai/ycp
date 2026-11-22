@@ -1,4 +1,4 @@
-// Run with: node --test whatsapp/gmail/PhotoSaver.test.js
+// Run with: node --test whatsapp/PhotoSaver.test.js
 // Loads PhotoSaver.gs into a sandbox with fake Gmail and Drive services.
 const test = require('node:test');
 const assert = require('node:assert/strict');

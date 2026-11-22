@@ -1,9 +1,0 @@
-{
-  "community": "Example Community Name",
-  "channels": [
-    {
-      "name": "Example Channel Name",
-      "local_folder": "example-channel"
-    }
-  ]
-}
