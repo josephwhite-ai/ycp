@@ -6,6 +6,7 @@
   "scripts": {
     "snapshot": "node scripts/snapshot.mjs",
     "embed": "node scripts/use-embed.mjs",
+    "editor": "node scripts/preview-editor.mjs",
     "sync": "node scripts/sync-leaders.mjs",
     "dev": "node scripts/serve.mjs",
     "test": "node --test"
