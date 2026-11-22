@@ -7,7 +7,7 @@ This repository contains automation projects for YCP workflows.
 - bulletins/: existing bulletin PDF event-extraction scripts.
 - glueup/: Glue Up event-page and campaign preparation agent.
 - webflow/: work on the Central Connecticut chapter page of the national Webflow site.
-- whatsapp/: WhatsApp Web media scraper and login helpers.
+- whatsapp/: Apps Script that saves WhatsApp photos, forwarded to Gmail, into the shared drive.
 
 ## Workflows
 
