@@ -69,7 +69,14 @@ function parseDate(text, zone, pattern) {
   return new Date(local.getTime() * 2 - asUTC.getTime());
 }
 
-function setup(messages, buildTree = () => {}, { pageSize = 1000 } = {}) {
+const ROSTER = [
+  ['Team Roster', '', ''],
+  ['Name', 'Role', 'Cell Phone'],
+  ['Joe', 'Chair', '(203) 555-0142'],
+  ['Pat', 'Member', '860-555-0101']
+];
+
+function setup(messages, buildTree = () => {}, { pageSize = 1000, roster = ROSTER, gid = 1148345069 } = {}) {
   const created = [];
   const root = folderNode('YCP', created);
   root.id = '0APt58RkpagPZUk9PVA';
@@ -110,6 +117,13 @@ function setup(messages, buildTree = () => {}, { pageSize = 1000 } = {}) {
         file.setDescription(data.description);
         return { id: 'file-' + created.length };
       }
+    } },
+    SpreadsheetApp: { openById: id => {
+      assert.equal(id, '1F0zh_DtEc8QGjml4kmj_Vqc4CznR0bhyTCV7s9XmjTc');
+      return { getSheets: () => [
+        { getSheetId: () => 0, getDataRange: () => ({ getDisplayValues: () => [['Other tab', '+12035550000']] }) },
+        { getSheetId: () => gid, getDataRange: () => ({ getDisplayValues: () => roster }) }
+      ] };
     } },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     GmailApp: { search: query => { assert.equal(typeof query, 'string'); searches.push(query); return [{ getMessages: () => messages }]; } },
@@ -240,4 +254,46 @@ test('paginates folder and saved-photo listings without duplicate uploads', () =
   }, { pageSize: 1 });
   assert.equal(ctx.savePhotos(), 0);
   assert.equal(created.length, 0);
+});
+
+test('reads roster phone numbers from phone-like header columns', () => {
+  const { ctx } = setup([]);
+  const rows = [
+    ['YCP Team', '', '', ''],
+    ['Name', 'Member Number', 'Mobile', 'WhatsApp'],
+    ['Joe', '1234567890123', '+1 (203) 555-0142', ''],
+    ['Pat', '9999999999', '860.555.0101 / 860-555-0199', '+44 7700 900123'],
+    ['Sam', '', 'n/a', ''],
+  ];
+  assert.deepEqual([...ctx.rosterPhonesFromRows(rows)].sort(),
+    ['12035550142', '447700900123', '8605550101', '8605550199']);
+});
+
+test('scans every cell for phone numbers when no header matches', () => {
+  const { ctx } = setup([]);
+  const rows = [['Joe', '203-555-0142', '11/14/2026'], ['Pat', 'pat@example.org', '12345']];
+  assert.deepEqual([...ctx.rosterPhonesFromRows(rows)], ['2035550142']);
+});
+
+test('only senders on the roster tab are saved', () => {
+  const messages = [
+    message('r1', email('Pat +18605550101', 'hi'), [blob('p.jpg', 'image/jpeg')]),
+    message('r2', email('Ann +12035550000', 'only on another tab'), [blob('a.jpg', 'image/jpeg')])
+  ];
+  const { ctx, created } = setup(messages, root => root.createFolder('2026').createFolder('11 November'));
+  assert.equal(ctx.savePhotos(), 1);
+  assert.match(created[0].name, / Pat 1\.jpg$/);
+});
+
+test('fails clearly when the roster tab is missing or has no numbers', () => {
+  const tree = root => root.createFolder('2026').createFolder('11 November');
+  assert.throws(() => setup([], tree, { gid: 5 }).ctx.savePhotos(), /No tab with gid 1148345069/);
+  assert.throws(() => setup([], tree, { roster: [['Name'], ['Joe']] }).ctx.savePhotos(), /no phone numbers/);
+});
+
+test('an empty roster stops the run even when extra senders are configured', () => {
+  const tree = root => root.createFolder('2026').createFolder('11 November');
+  const { ctx } = setup([], tree, { roster: [['Name'], ['Joe']] });
+  ctx.CONFIG.SENDERS = ['+12035550142'];
+  assert.throws(() => ctx.savePhotos(), /no phone numbers/);
 });
