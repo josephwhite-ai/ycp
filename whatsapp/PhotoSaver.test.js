@@ -72,7 +72,7 @@ function parseDate(text, zone, pattern) {
 const ROSTER = [
   ['Team Roster', '', ''],
   ['Name', 'Role', 'Cell Phone'],
-  ['Joe', 'Chair', '(203) 982-5739'],
+  ['Joe', 'Chair', '(203) 555-0142'],
   ['Pat', 'Member', '860-555-0101']
 ];
 
@@ -144,10 +144,10 @@ const message = (id, html, attachments, date = NOV_14) => ({
 
 test('parses the AutoForwardText table, including Gmail-style tel links', () => {
   const { ctx } = setup([]);
-  const fields = ctx.parseForwardedMessage(email('Joe <a href="tel:(203)%20982-5739" value="+12039825739">+12039825739</a>', 'Feel free &amp; post'));
-  assert.equal(fields.name, 'Joe +12039825739');
+  const fields = ctx.parseForwardedMessage(email('Joe <a href="tel:(203)%20555-0142" value="+12035550142">+12035550142</a>', 'Feel free &amp; post'));
+  assert.equal(fields.name, 'Joe +12035550142');
   assert.equal(fields.displayName, 'Joe');
-  assert.equal(fields.phone, '12039825739');
+  assert.equal(fields.phone, '12035550142');
   assert.equal(fields.content, 'Feel free & post');
   assert.equal(fields.direction, 'Incoming');
   assert.equal(fields.account, '+14434657439');
@@ -155,8 +155,8 @@ test('parses the AutoForwardText table, including Gmail-style tel links', () => 
 
 test('matches senders by phone in any format, or by name', () => {
   const { ctx } = setup([]);
-  const fields = ctx.parseForwardedMessage(email('Joe +12039825739', 'hi'));
-  assert.ok(ctx.isWantedSender(fields, ['(203) 982-5739']));
+  const fields = ctx.parseForwardedMessage(email('Joe +12035550142', 'hi'));
+  assert.ok(ctx.isWantedSender(fields, ['(203) 555-0142']));
   assert.ok(ctx.isWantedSender(fields, ['joe']));
   assert.ok(!ctx.isWantedSender(fields, ['+12035550000', 'Ann']));
 });
@@ -173,9 +173,9 @@ test('recognises month folder names in common styles', () => {
 
 test('saves only image attachments from wanted, incoming senders, once, into existing month folders', () => {
   const messages = [
-    message('m1', email('Joe +12039825739', 'photos'), [blob('IMG_1.jpeg', 'image/jpeg'), blob('notes.pdf', 'application/pdf'), blob('', 'image/png')]),
+    message('m1', email('Joe +12035550142', 'photos'), [blob('IMG_1.jpeg', 'image/jpeg'), blob('notes.pdf', 'application/pdf'), blob('', 'image/png')]),
     message('m2', email('Ann +12035550000', 'not wanted'), [blob('a.jpg', 'image/jpeg')]),
-    message('m3', email('Joe +12039825739', 'mine', 'Outgoing'), [blob('b.jpg', 'image/jpeg')])
+    message('m3', email('Joe +12035550142', 'mine', 'Outgoing'), [blob('b.jpg', 'image/jpeg')])
   ];
   let november;
   const { ctx, created, root } = setup(messages, root => {
@@ -184,18 +184,18 @@ test('saves only image attachments from wanted, incoming senders, once, into exi
     november = y2026.createFolder('11 November');
     november.createFile({ name: 'already.jpg' }).setDescription('gmail-message:m1#0\nFrom: Joe');
   });
-  ctx.CONFIG.SENDERS = ['+1 203 982 5739'];
+  ctx.CONFIG.SENDERS = ['+1 203 555 0142'];
   assert.equal(ctx.savePhotos(), 1);
   assert.deepEqual(created.map(f => f.name), ['2026-11-14 1150 Joe 2.png']);
   assert.equal(created[0].folder, november);
-  assert.match(created[0].description, /^gmail-message:m1#1\nFrom: Joe \+12039825739\nText: photos$/);
+  assert.match(created[0].description, /^gmail-message:m1#1\nFrom: Joe \+12035550142\nText: photos$/);
   assert.equal(root.children.length, 1, 'no new year folder');
   assert.equal(ctx.savePhotos(), 0, 'second run finds nothing new');
 });
 
 test('creates missing year and month folders', () => {
   const jan = new Date(Date.UTC(2027, 0, 2, 9, 5));
-  const { ctx, created, root } = setup([message('m9', email('Joe +12039825739', '', 'Incoming', 'Jan 2, 2027 4:05 AM America/New_York'), [blob('x.jpg', 'image/jpeg')], jan)],
+  const { ctx, created, root } = setup([message('m9', email('Joe +12035550142', '', 'Incoming', 'Jan 2, 2027 4:05 AM America/New_York'), [blob('x.jpg', 'image/jpeg')], jan)],
     root => root.createFolder('2026').createFolder('11 - November'));
   ctx.CONFIG.CREATE_MISSING_FOLDERS = true;
   assert.equal(ctx.savePhotos(), 1);
@@ -206,14 +206,14 @@ test('creates missing year and month folders', () => {
 });
 
 test('uses the WhatsApp month even when forwarded in a different month', () => {
-  const forwarded = message('late', email('Joe +12039825739', 'photos'), [blob('x.jpg', 'image/jpeg')], new Date('2026-12-01T12:00:00Z'));
+  const forwarded = message('late', email('Joe +12035550142', 'photos'), [blob('x.jpg', 'image/jpeg')], new Date('2026-12-01T12:00:00Z'));
   const { ctx, created } = setup([forwarded], root => root.createFolder('2026').createFolder('November'));
   assert.equal(ctx.savePhotos(), 1);
   assert.equal(created[0].folder.name, 'November');
 });
 
 test('uses New York year/month across UTC New Year and accepts a trigger event', () => {
-  const forwarded = message('year-boundary', email('Joe +12039825739', '', 'Incoming', ''), [blob('x.jpg', 'image/jpeg')], new Date('2027-01-01T02:00:00Z'));
+  const forwarded = message('year-boundary', email('Joe +12035550142', '', 'Incoming', ''), [blob('x.jpg', 'image/jpeg')], new Date('2027-01-01T02:00:00Z'));
   const { ctx, created, searches } = setup([forwarded], root => root.createFolder('2026').createFolder('12'));
   assert.equal(ctx.savePhotos({ triggerUid: '123' }), 1);
   assert.equal(created[0].folder.name, '12');
@@ -222,7 +222,7 @@ test('uses New York year/month across UTC New Year and accepts a trigger event',
 });
 
 test('does not create missing or ambiguous month folders by default', () => {
-  const messages = [message('m1', email('Joe +12039825739', ''), [blob('x.jpg', 'image/jpeg')])];
+  const messages = [message('m1', email('Joe +12035550142', ''), [blob('x.jpg', 'image/jpeg')])];
   const missing = setup(messages, root => root.createFolder('2026').createFolder('October'));
   assert.throws(() => missing.ctx.savePhotos(), /No matching folder/);
   assert.equal(missing.created.length, 0);
@@ -245,7 +245,7 @@ test('checks individual message sender and subject inside Gmail threads', () => 
 });
 
 test('paginates folder and saved-photo listings without duplicate uploads', () => {
-  const messages = [message('paged', email('Joe +12039825739', ''), [blob('x.jpg', 'image/jpeg')])];
+  const messages = [message('paged', email('Joe +12035550142', ''), [blob('x.jpg', 'image/jpeg')])];
   const { ctx, created } = setup(messages, root => {
     const year = root.createFolder('2026'); year.createFolder('October');
     const november = year.createFolder('November');
@@ -261,18 +261,18 @@ test('reads roster phone numbers from phone-like header columns', () => {
   const rows = [
     ['YCP Team', '', '', ''],
     ['Name', 'Member Number', 'Mobile', 'WhatsApp'],
-    ['Joe', '1234567890123', '+1 (203) 982-5739', ''],
+    ['Joe', '1234567890123', '+1 (203) 555-0142', ''],
     ['Pat', '9999999999', '860.555.0101 / 860-555-0199', '+44 7700 900123'],
     ['Sam', '', 'n/a', ''],
   ];
   assert.deepEqual([...ctx.rosterPhonesFromRows(rows)].sort(),
-    ['12039825739', '447700900123', '8605550101', '8605550199']);
+    ['12035550142', '447700900123', '8605550101', '8605550199']);
 });
 
 test('scans every cell for phone numbers when no header matches', () => {
   const { ctx } = setup([]);
-  const rows = [['Joe', '203-982-5739', '11/14/2026'], ['Pat', 'pat@example.org', '12345']];
-  assert.deepEqual([...ctx.rosterPhonesFromRows(rows)], ['2039825739']);
+  const rows = [['Joe', '203-555-0142', '11/14/2026'], ['Pat', 'pat@example.org', '12345']];
+  assert.deepEqual([...ctx.rosterPhonesFromRows(rows)], ['2035550142']);
 });
 
 test('only senders on the roster tab are saved', () => {
@@ -294,6 +294,6 @@ test('fails clearly when the roster tab is missing or has no numbers', () => {
 test('an empty roster stops the run even when extra senders are configured', () => {
   const tree = root => root.createFolder('2026').createFolder('11 November');
   const { ctx } = setup([], tree, { roster: [['Name'], ['Joe']] });
-  ctx.CONFIG.SENDERS = ['+12039825739'];
+  ctx.CONFIG.SENDERS = ['+12035550142'];
   assert.throws(() => ctx.savePhotos(), /no phone numbers/);
 });

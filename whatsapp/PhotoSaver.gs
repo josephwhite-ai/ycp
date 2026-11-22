@@ -143,7 +143,7 @@ function isWantedSender(fields, senders) {
   return senders.some(function (sender) {
     var wantedDigits = digits_(sender);
     if (wantedDigits.length >= 7 && fields.phone) {
-      // Compare the last 10 digits so "+1 (203) 982-5739" matches "2039825739".
+      // Compare the last 10 digits so "+1 (203) 555-0142" matches "2035550142".
       return wantedDigits.slice(-10) === fields.phone.slice(-10);
     }
     var wantedName = String(sender).trim().toLowerCase();
