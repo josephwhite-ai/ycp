@@ -1,0 +1,5 @@
+pypdf
+anthropic
+google-genai
+google-auth
+google-api-python-client
