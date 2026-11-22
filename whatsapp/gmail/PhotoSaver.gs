@@ -3,7 +3,7 @@
  *
  * AutoForwardText sends each WhatsApp message as an email with a small table:
  * Name / Content / Time / Direction / Account. This script reads that table,
- * keeps the messages from the senders listed in CONFIG.SENDERS, and copies their
+ * keeps the messages from phone numbers on the team roster sheet, and copies their
  * photo attachments into <year>/<month> folders on the destination drive.
  *
  * Setup: paste this file into an Apps Script project, enable the Advanced Drive
@@ -12,9 +12,14 @@
  * every 15 minutes.
  */
 var CONFIG = {
-  // WhatsApp senders to keep. A phone number (any formatting) or a name exactly as
-  // it shows in the email's Name row.
-  SENDERS: ['+12039825739'],
+  // The allowlist is the team roster: every phone number on this tab of this sheet.
+  // Columns whose header mentions phone, mobile, cell, WhatsApp or tel are read; if no
+  // such header is found, phone numbers anywhere on the tab count.
+  ROSTER_SPREADSHEET_ID: '1F0zh_DtEc8QGjml4kmj_Vqc4CznR0bhyTCV7s9XmjTc',
+  ROSTER_SHEET_GID: 1148345069,
+  // Extra senders not on the roster: a phone number (any formatting) or a name
+  // exactly as it shows in the email's Name row.
+  SENDERS: [],
   // Destination folder (here, the root of the YCP shared drive), from the URL:
   // drive.google.com/drive/folders/<ID>. Photos go into <year>/<month> subfolders.
   FOLDER_ID: '0APt58RkpagPZUk9PVA',
@@ -55,6 +60,11 @@ function savePhotos_(query) {
   });
   if (metadata.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Destination must be a folder.');
   var root = driveFolder_(metadata, metadata.driveId);
+  var roster = rosterPhones_();
+  // An empty roster almost always means the tab or its layout changed; stop rather
+  // than silently saving nothing (or only the CONFIG.SENDERS extras).
+  if (!roster.length) throw new Error('The roster tab has no phone numbers, so no roster sender would match.');
+  var senders = roster.concat(CONFIG.SENDERS);
   var monthFolders = {};  // "2026-11" -> { folder, saved }
   var threads = GmailApp.search(query, 0, CONFIG.MAX_THREADS);
   var count = 0;
@@ -66,7 +76,7 @@ function savePhotos_(query) {
       var address = (from.match(/<([^<>]+)>\s*$/) || [null, from])[1].trim().toLowerCase();
       if (address !== 'support@autoforwardtext.com' || !/^New WhatsApp From /i.test(message.getSubject())) return;
       var fields = parseForwardedMessage(message.getBody());
-      if (!fields.name || !isWantedSender(fields, CONFIG.SENDERS)) return;
+      if (!fields.name || !isWantedSender(fields, senders)) return;
       if (CONFIG.INCOMING_ONLY && fields.direction && !/incoming/i.test(fields.direction)) return;
 
       var photos = photoAttachments_(message);
@@ -140,6 +150,46 @@ function isWantedSender(fields, senders) {
     return wantedName !== '' &&
       (wantedName === fields.displayName.toLowerCase() || wantedName === fields.name.toLowerCase());
   });
+}
+
+/** Phone numbers (digits only) from the roster tab named in CONFIG. */
+function rosterPhones_() {
+  var book = SpreadsheetApp.openById(CONFIG.ROSTER_SPREADSHEET_ID);
+  var sheet = book.getSheets().filter(function (tab) { return tab.getSheetId() === CONFIG.ROSTER_SHEET_GID; })[0];
+  if (!sheet) throw new Error('No tab with gid ' + CONFIG.ROSTER_SHEET_GID + ' in the roster spreadsheet.');
+  return rosterPhonesFromRows(sheet.getDataRange().getDisplayValues());
+}
+
+var PHONE_HEADER = /phone|mobile|cell|whats\s*app|\btel\b/i;
+
+/**
+ * Phone numbers from roster rows. Uses the phone-like header columns when the
+ * first rows have them, otherwise scans every cell. A cell may hold several
+ * numbers separated by commas, semicolons, slashes or line breaks.
+ */
+function rosterPhonesFromRows(rows) {
+  var headerRow = -1, columns = [];
+  for (var r = 0; r < Math.min(rows.length, 10) && headerRow < 0; r++) {
+    rows[r].forEach(function (cell, c) {
+      if (PHONE_HEADER.test(cell) && !isPhone_(cell)) columns.push(c);
+    });
+    if (columns.length) headerRow = r;
+  }
+  var found = {};
+  rows.slice(headerRow + 1).forEach(function (row) {
+    (columns.length ? columns.map(function (c) { return row[c]; }) : row).forEach(function (cell) {
+      String(cell || '').split(/[,;\/\n]|\bor\b/i).forEach(function (part) {
+        if (isPhone_(part)) found[digits_(part)] = true;
+      });
+    });
+  });
+  return Object.keys(found);
+}
+
+function isPhone_(text) {
+  var value = String(text).trim();
+  var count = digits_(value).length;
+  return /^[+\d\s().-]+$/.test(value) && count >= 10 && count <= 15;
 }
 
 /** e.g. "2026-11-14 1150 Joe 1.jpg" */
