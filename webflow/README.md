@@ -65,12 +65,24 @@ Editors change leaders in a Google Sheet; nobody needs to touch this repository.
 
 ### For editors
 
-- **One row per leader.** The columns are Name, Title, Group and Photo. Extra columns (for notes) are ignored.
-- **Group** is `Leadership` or `Board & Chaplaincy`, matching the two tabs on the chapter page.
-- **Order:** leaders appear in the same order as the rows. Move a row to move a card. Blank rows are skipped.
-- **Photo:** upload the photo to the shared leaders photos folder in Google Drive, then right-click it, choose Share > Copy link, and paste the link into the Photo cell. A web address of an image also works. Do not insert the image into the cell itself; the sync can't see it. Any size and JPEG, PNG or iPhone (HEIC) photos are fine; they are shrunk automatically. Square, face-centred photos look best in the circles. Leave the cell empty for no photo.
-- **Publishing:** changes go live within the hour. To publish straight away, use the sheet's Website > Publish leaders now menu. Either way, visitors' browsers may show the old list for up to 10 more minutes.
-- **Mistakes are safe:** if a row has a problem (an unknown group, a photo that can't be opened), nothing is published and the website keeps showing the last good version. Website > Check the last publish says whether it failed and links to the list of rows to fix.
+Open the leaders Sheet and choose **Website > Edit leaders**. The editor runs inside the Sheet; no separate website or public Apps Script deployment is needed.
+
+- **Add or edit:** select a person on the left, or choose **+ Add**. Set their name, title and section (Leadership or Board & Chaplaincy).
+- **Headshot:** choose **Upload photo**, or paste a Google Drive photo link or an image web address. Uploads accept JPEG, PNG, WebP and iPhone HEIC/HEIF photos up to 10 MB. Square, face-centred photos look best. The editor shows a circular preview; **Preview full roster** shows both sections. HEIC thumbnails may not be available until Drive processes the image.
+- **Order:** use **Move up / Move down** within a section. **Remove this person** removes them from the draft.
+- **Save draft:** saves work for later, shared with the other Sheet editors. The website and hourly sync continue using the approved roster. Unsaved edits stay in the open dialog until saved; close it only after saving.
+- **Publish changes:** approves the whole draft, writes it to the first tab and starts the existing GitHub publishing workflow. If immediate publishing cannot start, the approved roster is still saved for the next hourly sync. Visitors' browsers may show the old list for up to 10 more minutes after deployment.
+- **Check publish status:** reports the latest workflow run, including scheduled runs, and links to details. It is not a receipt for a particular editor's submission. If a photo can't be downloaded or a row is invalid, the existing sync refuses to deploy and the public site keeps its last good roster.
+
+The dialog detects another editor's saved changes and refuses to overwrite them. It keeps your local edits open so you can copy them before reloading. Photos uploaded while drafting stay in the shared Drive folder; removing a person or replacing a photo does not delete Drive files.
+
+### Sheet tabs and bulk edits
+
+The **first tab is the approved roster**, with Name, Title, Group and Photo columns. The sync reads only this tab. Keep it first. The editor creates a hidden `_Leaders draft` tab with stable person IDs. Hidden means out of the way, not a separate access boundary: everyone who can edit the Sheet can see and edit the draft.
+
+For bulk changes after the editor is installed, unhide `_Leaders draft` and edit its Name, Title, Group or Photo columns. Preserve the ID column and headings. Reopen the editor to review and publish those changes. Direct changes to the first tab bypass draft review and can be published by the hourly job; use the draft tab for work in progress.
+
+Photo cells contain links, not images inserted into the cell. Group is `Leadership` or `Board & Chaplaincy`. Photos are downloaded by the service account and resized automatically to 600px JPEGs. Extra columns are ignored by the public sync; use them only for plain-text notes. When a person is renamed or moves sections through the editor, copy any extra notes you need before publishing.
 
 ### How it works
 
@@ -84,7 +96,29 @@ The hourly run compares the sheet with the published `leaders.json` and stops be
 2. **Make a photos folder** in Google Drive for headshots.
 3. **Share both** (Viewer is enough) with the service account in the repository's `GOOGLE_SERVICE_ACCOUNT_JSON` secret, the same one the Glue Up workflow uses. Its address is the `client_email` in that key file. Share the sheet and folder with editors as Editor.
 4. **Connect the sheet:** in GitHub, Settings > Secrets and variables > Actions > Variables, add `LEADERS_SHEET_ID` with the sheet's ID, the long part of its address between `/d/` and `/edit`. The next hourly run publishes from the sheet; to publish straight away, run the "Publish Webflow leaders embed" workflow from the Actions tab.
-5. **Optional Publish menu:** in the sheet, open Extensions > Apps Script, paste [sheet/Publish.gs](sheet/Publish.gs) and save. Create a fine-grained GitHub token limited to this repository with only "Actions: Read and write", and add it in Apps Script under Project Settings > Script properties as `GITHUB_TOKEN`. Reload the sheet to see the Website menu. The token belongs to whoever creates it; anyone who can edit the script can see it, so share the sheet's script access carefully.
+5. **Install the editor:** open Extensions > Apps Script in this Sheet. Add/update these three files (keep just one `onOpen` function):
+   - `Publish.gs`: paste [sheet/Publish.gs](sheet/Publish.gs).
+   - `Editor.gs`: paste [sheet/Editor.gs](sheet/Editor.gs).
+   - Add an **HTML** file named `Editor`: paste [sheet/Editor.html](sheet/Editor.html).
+6. **Set Script properties** under Apps Script > Project Settings:
+
+   | Property | Value |
+   | --- | --- |
+   | `LEADERS_PHOTOS_FOLDER_ID` | The shared photos folder ID. The signed-in editor needs permission to create files there; the service account needs Viewer access. Without this property, link-based photos still work and the upload button is disabled. |
+   | `GITHUB_TOKEN` | A fine-grained token for `josephwhite-ai/ycp` with only **Actions: Read and write**, used for immediate publishing and status. Without it, approved changes wait for the hourly sync. |
+
+   The token belongs to whoever creates it; Sheet editors can edit the bound script and read its properties. Give Sheet access only to trusted chapter editors. The editor executes as each signed-in editor and uses their existing Sheet/Drive access. It does not change file sharing or send Google credentials to the browser.
+7. **Save, reload the Sheet, then choose Website > Edit leaders.** Google may ask each editor to authorize the script's Sheet, Drive and external-request access the first time. On first open, the editor copies the approved roster into its draft tab. Try changing a title and saving a draft: the first tab must stay unchanged. Then publish and check the workflow outcome. No Apps Script web-app deployment is required.
+
+Existing installations that have only `Publish.gs` must replace it and add both editor files. **Website > Republish approved leaders** retries delivery of the first tab; it never promotes a saved draft.
+
+### Preview the form locally
+
+```bash
+npm run editor
+```
+
+Open http://localhost:4174/. This serves the same `Editor.html` with a clearly labelled in-memory demo adapter, seeded from `api/leaders.json`. Add/edit/remove, order, upload previews, Save draft, Publish changes and status can be tried without calling Google or GitHub. Refreshing the browser resets the demo. The adapter is never part of the installed Apps Script editor or the GitHub Pages build.
 
 To run the sync on your machine:
 

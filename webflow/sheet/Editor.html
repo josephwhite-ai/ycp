@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter leaders</title>
+  <style>
+    :root { color-scheme: light; --green:#214b3f; --ink:#20352e; --muted:#68766d; --line:#dce3dc; --paper:#fafbf7; }
+    * { box-sizing:border-box; }
+    body { margin:0; height:100vh; display:flex; flex-direction:column; overflow:hidden; color:var(--ink); background:var(--paper); font:14px/1.5 system-ui,-apple-system,sans-serif; }
+    button,input,select,textarea { font:inherit; }
+    button { cursor:pointer; border:1px solid var(--line); border-radius:7px; padding:9px 13px; background:white; color:var(--ink); }
+    button:hover:not(:disabled) { background:#eef3ec; }
+    button:disabled { opacity:.45; cursor:default; }
+    button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible { outline:3px solid #9cbc9e; outline-offset:2px; }
+    button.primary { background:var(--green); border-color:var(--green); color:white; }
+    button.primary:hover:not(:disabled) { background:#16382e; }
+    button.quiet { background:transparent; }
+    .muted { color:var(--muted); }
+    .eyebrow { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+    header { display:flex; flex-shrink:0; justify-content:space-between; align-items:center; gap:15px; padding:20px 26px; border-bottom:1px solid var(--line); background:white; }
+    h1 { margin:3px 0 0; font:29px/1.15 Georgia,serif; }
+    h2 { margin:0 0 17px; font-size:19px; }
+    .badge { border:1px solid #d8dfd2; background:#f3f5e9; padding:5px 10px; border-radius:30px; font-size:12px; white-space:nowrap; }
+    #demo-note { flex-shrink:0; padding:9px 26px; background:#fff2ce; color:#64501a; font-weight:600; }
+    #notice { flex-shrink:0; max-height:100px; overflow:auto; margin:14px 24px 0; padding:11px 14px; background:#eaf1e8; border:1px solid #cbdcc8; border-radius:7px; overflow-wrap:anywhere; }
+    #notice.error { background:#fff0ed; border-color:#e8b9af; color:#842c20; }
+    [hidden] { display:none !important; }
+    main { display:grid; grid-template-columns:260px minmax(280px,1fr) 215px; flex:1; min-height:0; }
+    .roster { border-right:1px solid var(--line); padding:20px 14px; background:#f1f4ee; overflow:auto; }
+    .roster-top { display:flex; justify-content:space-between; align-items:center; margin:0 4px 18px; }
+    .roster-top button { padding:6px 10px; }
+    .group-heading { display:flex; justify-content:space-between; margin:20px 8px 8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+    .person { display:flex; align-items:center; gap:10px; width:100%; text-align:left; border-color:transparent; background:transparent; padding:10px; margin:2px 0; }
+    .person[aria-current="true"] { background:white; border-color:#bbcec0; box-shadow:0 1px 3px #17342209; }
+    .person-copy { min-width:0; }
+    .person-name { display:block; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .person-title { display:block; color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .initials { display:grid; place-items:center; background:#dde7d9; color:#315540; border-radius:50%; width:33px; height:33px; flex:none; font:14px Georgia,serif; }
+    .editor { padding:25px 28px; overflow:auto; }
+    #preview-mobile { display:none; }
+    .section-top { display:flex; justify-content:space-between; gap:10px; align-items:start; }
+    .section-top h2 { margin-bottom:5px; }
+    .section-top p { font-size:12px; margin:0 0 19px; }
+    label { display:block; margin:16px 0 6px; font-weight:600; font-size:12px; }
+    input,select,textarea { width:100%; padding:10px 11px; border:1px solid #cdd7ce; border-radius:6px; background:white; color:var(--ink); }
+    textarea { resize:vertical; min-height:74px; }
+    .help { margin:6px 0; font-size:12px; color:var(--muted); }
+    .photo-row { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .photo-row button { font-size:12px; padding:7px 10px; }
+    .order-row { display:flex; justify-content:space-between; gap:12px; align-items:center; padding-top:18px; margin-top:20px; border-top:1px solid var(--line); }
+    .order-buttons { display:flex; gap:6px; }
+    .order-buttons button { font-size:12px; padding:7px 10px; }
+    .remove { color:#94372b; font-size:12px; border-color:transparent; padding-left:0; }
+    .preview-pane { padding:28px 18px; border-left:1px solid var(--line); overflow:auto; }
+    .preview-card { text-align:center; padding:25px 8px 18px; overflow-wrap:anywhere; }
+    .headshot { width:116px; height:116px; display:grid; place-items:center; border-radius:50%; background:#e5ebe0; color:#7b8d76; margin:0 auto 16px; overflow:hidden; font:34px Georgia,serif; }
+    .headshot img { width:100%; height:100%; object-fit:cover; }
+    .preview-card h3 { font:20px/1.25 Georgia,serif; margin:0 0 7px; }
+    .preview-card p { margin:0; font-size:13px; color:var(--muted); }
+    .preview-pane .help { text-align:center; margin:16px 0; }
+    .preview-pane button { width:100%; font-size:12px; }
+    .empty { padding:30px 0; color:var(--muted); }
+    footer { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:20px; padding:17px 26px; background:white; border-top:1px solid var(--line); }
+    footer p { font-size:12px; margin:0; max-width:420px; }
+    .actions { display:flex; flex-wrap:wrap; gap:9px; }
+    dialog { border:1px solid var(--line); border-radius:12px; padding:26px; width:min(460px,90vw); color:var(--ink); box-shadow:0 20px 80px #132b3433; }
+    dialog::backdrop { background:#102c2666; }
+    dialog h2 { font:25px Georgia,serif; }
+    dialog .actions { justify-content:flex-end; margin-top:24px; }
+    #roster-preview { width:min(900px,94vw); max-height:85vh; }
+    .preview-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:22px; }
+    .preview-tabs { display:flex; gap:8px; margin:16px 0; }
+    .preview-tabs button[aria-pressed="true"] { border-color:var(--green); background:#eaf0e6; }
+    @media(max-width:850px) { main { grid-template-columns:210px 1fr; } .preview-pane { display:none; } #preview-mobile { display:block; } .editor { padding:22px; } }
+    @media(max-width:580px) { header,footer { padding:17px; } h1 { font-size:25px; } main { display:block; overflow:auto; } .roster { max-height:190px; border-bottom:1px solid var(--line); } .editor { overflow:visible; } .roster-top { margin-bottom:5px; } .group-heading { margin-top:10px; } footer { flex-direction:column; align-items:stretch; } .preview-grid { grid-template-columns:repeat(2,1fr); } }
+  </style>
+</head>
+<body>
+  <!-- LOCAL_PREVIEW_ADAPTER -->
+  <div id="demo-note" hidden>Local preview · Changes here do not affect the Sheet or website.</div>
+  <header>
+    <div><div class="eyebrow">YCP · Central Connecticut</div><h1>Chapter leaders</h1></div>
+    <span class="badge" id="draft-badge">Loading roster…</span>
+  </header>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <main aria-busy="true" id="workspace">
+    <nav class="roster" aria-label="People in the chapter">
+      <div class="roster-top"><strong>Your people <span class="muted" id="count"></span></strong><button id="add" disabled>+ Add</button></div>
+      <div id="people"></div>
+    </nav>
+    <section class="editor">
+      <div id="empty" class="empty">Loading your chapter’s roster…</div>
+      <form id="person-form" hidden>
+        <div class="section-top"><div><h2 id="edit-heading">Edit person</h2><p class="muted">Changes stay in draft until you publish.</p></div><button type="button" class="quiet" id="preview-mobile">Preview</button></div>
+        <label for="name">Full name <span aria-hidden="true">*</span></label>
+        <input id="name" name="name" required maxlength="160" autocomplete="name" placeholder="e.g. Jane Doe">
+        <label for="title">Title</label>
+        <textarea id="title" name="title" maxlength="500" rows="2" placeholder="e.g. Director of Membership"></textarea>
+        <label for="group">Section</label>
+        <select id="group" name="group"><option value="leadership">Leadership</option><option value="board">Board &amp; Chaplaincy</option></select>
+        <label for="photo">Headshot</label>
+        <input id="photo" name="photo" type="text" maxlength="2048" placeholder="Upload a photo or paste an image link">
+        <p class="help" id="upload-help">JPEG, PNG, WebP or HEIC · up to 10 MB. A square, face-centred photo works best.</p>
+        <div class="photo-row"><button type="button" id="upload">Upload photo</button><button type="button" id="clear-photo">Remove photo</button></div>
+        <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" hidden>
+        <div class="order-row"><div><strong style="font-size:12px">Display order</strong><p class="help" id="position"></p></div><div class="order-buttons"><button type="button" id="move-up">↑ Move up</button><button type="button" id="move-down">↓ Move down</button></div></div>
+        <button type="button" class="quiet remove" id="remove">Remove this person</button>
+      </form>
+    </section>
+    <aside class="preview-pane" aria-label="Website card preview">
+      <div class="eyebrow">Website preview</div><div id="card-preview"></div>
+      <p class="help">A preview of this person’s card. The website keeps its existing styles.</p>
+      <button id="preview-all" disabled>Preview full roster</button>
+    </aside>
+  </main>
+  <footer>
+    <div><p id="save-status">Opening the saved draft…</p><button id="check-status" class="quiet" style="font-size:12px;padding:5px 0" disabled>Check publish status</button></div>
+    <div class="actions"><button id="reload">Reload</button><button id="save" disabled>Save draft</button><button class="primary" id="publish" disabled>Publish changes</button></div>
+  </footer>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-copy"></p><div class="actions"><button id="cancel-confirm">Cancel</button><button class="primary" id="accept-confirm">Continue</button></div></dialog>
+  <dialog id="roster-preview" aria-labelledby="preview-title"><div class="section-top"><div><div class="eyebrow">Draft preview</div><h2 id="preview-title">Our chapter</h2></div><button id="close-preview">Close</button></div><div class="preview-tabs"><button data-preview-group="leadership" aria-pressed="true">Leadership</button><button data-preview-group="board" aria-pressed="false">Board &amp; Chaplaincy</button></div><div class="preview-grid" id="preview-grid"></div></dialog>
+  <script>
+    "use strict";
+    const $ = id => document.getElementById(id);
+    const labels = { leadership: "Leadership", board: "Board & Chaplaincy" };
+    let state = null, selectedId = null, saved = "", busy = false, previewGroup = "leadership";
+    const photoPreviews = new Map(), pendingPreviews = new Set();
+    const current = () => state?.leaders.find(person => person.id === selectedId);
+    const dirty = () => !!state && JSON.stringify(state.leaders) !== saved;
+    const rpc = (method, ...args) => window.leadersEditorPreviewApi
+      ? window.leadersEditorPreviewApi(method, ...args)
+      : new Promise((resolve, reject) => {
+          if (!window.google?.script?.run) return reject(new Error("Open this editor from Website > Edit leaders in the Google Sheet."));
+          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[method](...args);
+        });
+    function notice(message, error = false) { $("notice").textContent = message; $("notice").hidden = !message; $("notice").classList.toggle("error", error); }
+    function errorMessage(error) { notice(error.message || String(error), true); }
+    function setBusy(value) { busy = value; $("workspace").setAttribute("aria-busy", String(value)); updateButtons(); }
+    function updateButtons() {
+      document.querySelectorAll("button,input,textarea,select").forEach(node => { node.disabled = busy; });
+      if (!state) { ["add","save","publish","preview-all","check-status"].forEach(id => { $(id).disabled = true; }); return; }
+      $("save").disabled = busy || !dirty();
+      $("publish").disabled = busy || !state.leaders.length;
+      $("upload").disabled = busy || !state.uploadsEnabled;
+      $("clear-photo").disabled = busy || !current()?.photo;
+      const peers = state.leaders.filter(person => person.group === current()?.group);
+      const position = peers.findIndex(person => person.id === selectedId);
+      $("move-up").disabled = busy || position <= 0;
+      $("move-down").disabled = busy || position < 0 || position >= peers.length - 1;
+      $("position").textContent = position < 0 ? "" : `${position + 1} of ${peers.length} in ${labels[current().group]}`;
+      $("draft-badge").textContent = dirty() ? "Unsaved changes" : state.hasUnpublishedChanges ? "Unpublished draft" : "Matches approved roster";
+      $("save-status").textContent = dirty() ? "You have unsaved changes. Save your draft before closing." : state.hasUnpublishedChanges ? "Draft saved. The public website has not changed." : "Draft matches the approved roster. Publishing may still be in progress.";
+    }
+    function node(tag, className, text) { const el = document.createElement(tag); if (className) el.className = className; if (text) el.textContent = text; return el; }
+    function initials(name) { return name.trim().split(/\s+/).slice(0,2).map(part => part[0] || "").join("").toUpperCase() || "+"; }
+    function driveId(photo) { return photo.match(/^https:\/\/(?:drive|docs)\.google\.com\/.*?\/d\/([\w-]{20,})/)?.[1] || photo.match(/^https:\/\/(?:drive|docs)\.google\.com\/.*[?&]id=([\w-]{20,})/)?.[1] || photo.match(/^([\w-]{25,})$/)?.[1]; }
+    function previewUrl(photo) {
+      if (!photo) return "";
+      if (photoPreviews.has(photo)) return photoPreviews.get(photo);
+      if (driveId(photo)) {
+        if (!pendingPreviews.has(photo)) {
+          pendingPreviews.add(photo);
+          rpc("getLeaderPhotoPreview", photo).then(url => { photoPreviews.set(photo, /^data:image\/(?:jpeg|png|webp|gif);base64,/.test(url) ? url : ""); renderPreviews(); }).catch(() => { photoPreviews.set(photo, ""); pendingPreviews.delete(photo); });
+        }
+        return "";
+      }
+      return /^https?:\/\/[^\s]+$/i.test(photo) ? photo : "";
+    }
+    function card(person) {
+      const el = node("article", "preview-card"), headshot = node("div", "headshot", initials(person.name));
+      const url = previewUrl(person.photo);
+      if (url) { const img = new Image(); img.alt = person.name; img.src = url; img.onerror = () => { headshot.replaceChildren(document.createTextNode(initials(person.name))); }; headshot.replaceChildren(img); }
+      el.append(headshot, node("h3", "", person.name || "Full name"), node("p", "", person.title || "Chapter title"));
+      return el;
+    }
+    function renderPreviews() {
+      $("card-preview").replaceChildren(...(current() ? [card(current())] : []));
+      if ($("roster-preview").open) {
+        const people = state.leaders.filter(person => person.group === previewGroup);
+        $("preview-grid").replaceChildren(...people.map(card));
+        if (!people.length) $("preview-grid").append(node("p", "muted", "No people in this section yet."));
+      }
+    }
+    function renderList() {
+      $("people").replaceChildren(); $("count").textContent = `(${state.leaders.length})`;
+      for (const group of Object.keys(labels)) {
+        const people = state.leaders.filter(person => person.group === group);
+        const heading = node("div", "group-heading", labels[group]); heading.append(node("span", "", String(people.length))); $("people").append(heading);
+        for (const person of people) {
+          const button = node("button", "person"); button.type = "button"; button.setAttribute("aria-current", String(person.id === selectedId));
+          const copy = node("span", "person-copy"); copy.append(node("span", "person-name", person.name || "New person"), node("span", "person-title", person.title || "Add a title"));
+          button.append(node("span", "initials", initials(person.name)), copy); button.onclick = () => select(person.id); $("people").append(button);
+        }
+      }
+    }
+    function select(id) {
+      selectedId = id; const person = current(); $("person-form").hidden = !person; $("empty").hidden = !!person;
+      $("empty").textContent = "Your roster is empty. Add a person to get started.";
+      if (person) for (const key of ["name","title","group","photo"]) $(key).value = person[key];
+      renderList(); renderPreviews(); updateButtons();
+    }
+    function acceptState(data) { for (const [photo, url] of photoPreviews) if (!url) photoPreviews.delete(photo); pendingPreviews.clear(); state = data; saved = JSON.stringify(data.leaders); select(data.leaders.some(person => person.id === selectedId) ? selectedId : data.leaders[0]?.id); $("upload-help").textContent = data.uploadsEnabled ? "JPEG, PNG, WebP or HEIC · up to 10 MB. Photos stay private in the chapter’s Drive folder." : "Paste an image link. Ask the technology lead to enable photo uploads."; }
+    async function load() {
+      if (dirty() && !await confirmAction("Reload roster?", "Your unsaved edits will be discarded. Saved drafts will still be there.", "Reload")) return;
+      setBusy(true); notice("");
+      try { acceptState(await rpc("getLeaderEditorData")); } catch (error) { errorMessage(error); $("empty").textContent = "The roster could not be loaded. Try Reload."; } finally { setBusy(false); }
+    }
+    function confirmAction(title, copy, action) {
+      $("confirm-title").textContent = title; $("confirm-copy").textContent = copy; $("accept-confirm").textContent = action;
+      return new Promise(resolve => {
+        const dialog = $("confirm-dialog"); dialog.returnValue = "";
+        $("cancel-confirm").onclick = () => dialog.close("cancel"); $("accept-confirm").onclick = () => dialog.close("accept");
+        dialog.onclose = () => resolve(dialog.returnValue === "accept"); dialog.showModal(); $("cancel-confirm").focus();
+      });
+    }
+    function validRoster() {
+      const invalid = state.leaders.find(person => !person.name.trim());
+      if (invalid) { select(invalid.id); $("name").reportValidity(); return false; }
+      return true;
+    }
+    async function persist(publish) {
+      if (!validRoster()) return;
+      if (publish && !await confirmAction("Publish this roster?", `Approve all ${state.leaders.length} people in this draft for the public chapter website? Publishing takes a few minutes.`, "Publish changes")) return;
+      setBusy(true); notice("");
+      try {
+        const data = await rpc(publish ? "publishLeaderDraft" : "saveLeaderDraft", { revision:state.revision, leaders:state.leaders });
+        acceptState(data); notice(publish ? data.message : "Draft saved. You can close the editor and continue later; the website has not changed.");
+      } catch (error) { errorMessage(error); } finally { setBusy(false); }
+    }
+    ["name","title","group","photo"].forEach(key => $(key).addEventListener("input", () => {
+      if (!current()) return; current()[key] = $(key).value; renderList(); renderPreviews(); updateButtons();
+    }));
+    $("person-form").onsubmit = event => { event.preventDefault(); persist(false); };
+    $("add").onclick = () => { const person = { id:crypto.randomUUID(), name:"", title:"", group:current()?.group || "leadership", photo:"" }; state.leaders.push(person); select(person.id); $("name").focus(); notice(""); };
+    $("remove").onclick = async () => {
+      const person = current(); if (!await confirmAction("Remove this person?", `${person.name || "This person"} will be removed from your draft. Publish the draft to update the website.`, "Remove person")) return;
+      const index = state.leaders.indexOf(person); state.leaders.splice(index, 1); select(state.leaders[Math.min(index,state.leaders.length-1)]?.id); notice("");
+    };
+    function move(direction) { const person = current(), peers = state.leaders.filter(item => item.group === person.group), other = peers[peers.indexOf(person) + direction]; if (!other) return; const a = state.leaders.indexOf(person), b = state.leaders.indexOf(other); [state.leaders[a], state.leaders[b]] = [state.leaders[b], state.leaders[a]]; select(person.id); }
+    $("move-up").onclick = () => move(-1); $("move-down").onclick = () => move(1);
+    $("clear-photo").onclick = () => { current().photo = ""; $("photo").value = ""; renderPreviews(); updateButtons(); };
+    $("upload").onclick = () => $("photo-file").click();
+    $("photo-file").onchange = async event => {
+      const file = event.target.files[0]; if (!file) return;
+      const person = current(), type = file.type || (/\.hei[cf]$/i.test(file.name) ? "image/heic" : "");
+      if (file.size > 10*1024*1024) { errorMessage(new Error("Choose a photo smaller than 10 MB.")); event.target.value = ""; return; }
+      setBusy(true); notice("Uploading photo…");
+      try {
+        const dataUrl = await new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error("Could not read that photo.")); reader.readAsDataURL(file); });
+        const result = await rpc("uploadLeaderPhoto", { name:file.name, type, base64:dataUrl.split(",")[1] });
+        person.photo = result.photo; if (["image/jpeg","image/png","image/webp"].includes(type)) photoPreviews.set(result.photo, dataUrl);
+        select(person.id); notice("Photo uploaded. Save the draft to keep this change. It will appear publicly after publishing.");
+      } catch (error) { errorMessage(error); } finally { event.target.value = ""; setBusy(false); }
+    };
+    function openPreview() { $("roster-preview").showModal(); renderPreviews(); }
+    $("preview-all").onclick = openPreview; $("preview-mobile").onclick = openPreview; $("close-preview").onclick = () => $("roster-preview").close();
+    document.querySelectorAll("[data-preview-group]").forEach(button => button.onclick = () => { previewGroup = button.dataset.previewGroup; document.querySelectorAll("[data-preview-group]").forEach(tab => tab.setAttribute("aria-pressed",String(tab === button))); renderPreviews(); });
+    $("save").onclick = () => persist(false); $("publish").onclick = () => persist(true); $("reload").onclick = load;
+    $("check-status").onclick = async () => {
+      setBusy(true); notice("");
+      try {
+        const run = await rpc("getLeaderPublishStatus");
+        if (!run) notice("No publish runs yet.");
+        else {
+          notice(`Last workflow run, started ${new Date(run.startedAt).toLocaleString()}: ${run.status !== "completed" ? "still running" : run.conclusion === "success" ? "succeeded" : "did not complete successfully. The website keeps the last good roster"}.`);
+          if (/^https:\/\/github\.com\//.test(run.url)) { const link = node("a", "", " View publish details"); link.href = run.url; link.target = "_blank"; link.rel = "noopener"; $("notice").append(link); }
+        }
+      } catch (error) { errorMessage(error); } finally { setBusy(false); }
+    };
+    window.addEventListener("beforeunload", event => { if (dirty()) { event.preventDefault(); event.returnValue = ""; } });
+    $("demo-note").hidden = !window.leadersEditorPreviewApi;
+    load();
+  </script>
+</body>
+</html>
